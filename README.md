@@ -35,12 +35,25 @@ body is exactly:
   with OK." and "Hi" are 15 input tokens: nothing is added above the
   system prompt.
 - **Streaming.** Each `response.output_text.delta` is reported as
-  `ReplyArriving`. The reply is the text of `response.completed`'s output,
-  or, when that lists none (it may with `store: false`), of the
-  `response.output_item.done` items in order. `response.failed`,
-  `response.incomplete` and `error` are `Refused` with their reason, as is
-  a stream that ends before `response.completed`: a dropped connection is
-  never a short reply.
+  `ReplyArriving`. On `response.completed` the reply is a `FinishedReply`:
+  the text of its output or, when that lists none (it may with
+  `store: false`), of the `response.output_item.done` items in order.
+  `response.incomplete` (such as `max_output_tokens`) ran and spent
+  tokens, so it is `Ran` too, as a `CutOffReply` holding what came back.
+  `response.failed` and `error` are `Refused` with their reason, as is a
+  stream that ends before either: a dropped connection is never a short
+  reply.
+- **Usage.** Each reply carries a `ModelUsage` from the response's
+  `usage`. OpenAI counts cached and cache-written tokens inside
+  `input_tokens`; `ModelUsage.input` has them taken out, so `cacheRead`
+  is `cached_tokens`, `cacheCreation` is `cache_write_tokens` (null when
+  absent) and `context` adds back up to `input_tokens`. `contextWindow` is
+  the model's `context_window` from the plan's `GET /v1/models`, read
+  beside the first call on each sign-in, kept, and read again for a model
+  the list did not name. It is null when the list cannot be read or does
+  not name the model, never a guess. The plan also lists a larger
+  `max_context_window` behind an experimental setting; the smaller one is
+  used.
 - **HTTP errors** are refused with their code, such as
   `chatgpt: HTTP 429: subscription_sharing_usage_limit_exceeded: …`.
 - **Ten minutes** at most per call.
