@@ -18,11 +18,34 @@ void main() {
   final seen = <Seen>[];
   // What the fake answers: a status and a body.
   late (int, String) answer;
+  // What it answers `GET /v1/models` with, and how often it was asked.
+  late (int, String) models;
+  var modelLookups = 0;
 
   setUp(() async {
     seen.clear();
+    modelLookups = 0;
+    models = (
+      200,
+      jsonEncode({
+        'models': [
+          {'slug': 'gpt-6.1-sol', 'context_window': 500000},
+          {'slug': 'gpt-6.2-astra', 'context_window': 272000},
+        ],
+      }),
+    );
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     server.listen((request) async {
+      // wire-ok: the fake routes by the path the driver asks for.
+      if (request.uri.path == '/v1/models') {
+        modelLookups++;
+        final (status, text) = models;
+        request.response
+          ..statusCode = status
+          ..write(text);
+        await request.response.close();
+        return;
+      }
       final body = <int>[];
       await request.forEach(body.addAll);
       final headers = <String, String>{};
@@ -156,6 +179,125 @@ void main() {
       expect((out as Ran<ModelReply>).output.text, 'second');
     },
   );
+
+  Map<String, Object> completed(String text, Map<String, Object> usage) => {
+    'type': 'response.completed',
+    'response': {
+      'output': [message(text)],
+      'usage': usage,
+    },
+  };
+
+  const usage = {
+    'input_tokens': 1200,
+    'input_tokens_details': {'cached_tokens': 1000},
+    'output_tokens': 7,
+  };
+
+  test('reports usage with the cached tokens taken out of input, and the '
+      'plan\'s context window', () async {
+    answer = (200, sse([completed('OK', usage)]));
+    final (out, _) = await ask('[{"role":"user","content":"Hi"}]');
+    final reply = (out as Ran<ModelReply>).output;
+    expect(reply, isA<FinishedReply>());
+    expect(
+      reply.usage,
+      const ModelUsage(
+        input: 200,
+        cacheRead: 1000,
+        output: 7,
+        contextWindow: 500000,
+      ),
+    );
+    expect(reply.usage!.context, 1200);
+  });
+
+  test(
+    'a cache write, when OpenAI counts one, is taken out of input too',
+    () async {
+      answer = (
+        200,
+        sse([
+          completed('OK', {
+            'input_tokens': 1200,
+            'input_tokens_details': {
+              'cached_tokens': 1000,
+              'cache_write_tokens': 150,
+            },
+            'output_tokens': 7,
+          }),
+        ]),
+      );
+      final (out, _) = await ask('[{"role":"user","content":"Hi"}]');
+      final spent = (out as Ran<ModelReply>).output.usage!;
+      expect(
+        (spent.input, spent.cacheCreation, spent.context),
+        (50, 150, 1200),
+      );
+    },
+  );
+
+  test(
+    'reads the models once per sign-in, and again for a model not listed',
+    () async {
+      answer = (200, sse([completed('OK', usage)]));
+      await ask('[{"role":"user","content":"Hi"}]');
+      await ask('[{"role":"user","content":"Hi"}]');
+      expect(modelLookups, 1);
+      final out = await driver.askTheModel(
+        cam,
+        ModelName.parse('gpt-6.2-astra')!,
+        '',
+        '[{"role":"user","content":"Hi"}]',
+        report: (_) {},
+      );
+      expect(modelLookups, 1, reason: 'the first read listed it already');
+      expect((out as Ran<ModelReply>).output.usage!.contextWindow, 272000);
+      final unseen = await driver.askTheModel(
+        cam,
+        ModelName.parse('gpt-6.3-sol')!,
+        '',
+        '[{"role":"user","content":"Hi"}]',
+        report: (_) {},
+      );
+      expect(modelLookups, 2);
+      expect((unseen as Ran<ModelReply>).output.usage!.contextWindow, isNull);
+    },
+  );
+
+  test(
+    'with the models out of reach, the window is unknown, never a guess',
+    () async {
+      models = (503, 'down');
+      answer = (200, sse([completed('OK', usage)]));
+      final (out, _) = await ask('[{"role":"user","content":"Hi"}]');
+      final reply = (out as Ran<ModelReply>).output;
+      expect(reply.text, 'OK');
+      expect(reply.usage!.contextWindow, isNull);
+    },
+  );
+
+  test('a cut-off reply ran: what came back, and what it spent', () async {
+    answer = (
+      200,
+      sse([
+        {'type': 'response.output_text.delta', 'delta': 'Half a'},
+        {
+          'type': 'response.incomplete',
+          'response': {
+            'incomplete_details': {'reason': 'max_output_tokens'},
+            'output': <Object>[],
+            'usage': usage,
+          },
+        },
+      ]),
+    );
+    final (out, _) = await ask('[{"role":"user","content":"Hi"}]');
+    final reply = (out as Ran<ModelReply>).output;
+    expect(reply, isA<CutOffReply>());
+    expect(reply.text, 'Half a');
+    expect(reply.usage!.output, 7);
+  });
 
   test('a failed response is refused with its error', () async {
     answer = (

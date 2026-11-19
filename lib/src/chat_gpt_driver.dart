@@ -91,6 +91,8 @@ final class ChatGptDriver implements AsksTheModel {
         body(model, systemPrompt, request),
         report,
         '$signIn $model',
+        // Looked up beside the call, not after it; it never throws.
+        _contextWindow(http, signIn, model, token),
       ).timeout(_limit);
     } on TimeoutException {
       return Refused('timed out after ${_limit.inSeconds}s');
@@ -102,12 +104,82 @@ final class ChatGptDriver implements AsksTheModel {
     }
   }
 
+  static ModelUsage? _usage(Spent? spent, int? contextWindow) =>
+      switch (spent) {
+        null => null,
+        (:final input, :final cached, :final output, :final cacheWritten) =>
+          ModelUsage(
+            input: input,
+            cacheRead: cached,
+            output: output,
+            cacheCreation: cacheWritten,
+            contextWindow: contextWindow,
+          ),
+      };
+
+  /// The plan's `context_window` for [model], from `GET /models` beside the
+  /// endpoint: read once per sign-in and kept, and read again for a model
+  /// not yet seen. Null when the plan does not list it or cannot be
+  /// reached, never a guess.
+  Future<int?> _contextWindow(
+    HttpClient http,
+    ModelSignInName signIn,
+    ModelName model,
+    AccessToken token,
+  ) async {
+    if (_windows[signIn]?[model.value] case final known?) return known;
+    try {
+      final request = await http
+          .getUrl(_endpoint.resolve('models'))
+          .timeout(_modelsLimit);
+      request.headers.set(
+        HttpHeaders.authorizationHeader,
+        'Bearer ${token.value}',
+      );
+      final response = await request.close().timeout(_modelsLimit);
+      final text = await utf8.decoder
+          .bind(response)
+          .join()
+          .timeout(_modelsLimit);
+      if (response.statusCode != 200) {
+        _log('$signIn: models: HTTP ${response.statusCode}');
+        return null;
+      }
+      final windows = switch (jsonDecode(text)) {
+        {'models': final List<Object?> models} => {
+          for (final m in models)
+            if (m case {
+              'slug': final String slug,
+              'context_window': final int window,
+            })
+              slug: window,
+        },
+        _ => <String, int>{},
+      };
+      _windows[signIn] = windows;
+      return windows[model.value];
+    } on IOException catch (e) {
+      _log('$signIn: models: ${e.runtimeType}');
+    } on TimeoutException {
+      _log('$signIn: models: no answer in ${_modelsLimit.inSeconds}s');
+    } on FormatException {
+      _log('$signIn: models: not JSON');
+    }
+    return null;
+  }
+
+  /// Each sign-in's models' context windows, by slug.
+  final _windows = <ModelSignInName, Map<String, int>>{};
+
+  static const _modelsLimit = Duration(seconds: 15);
+
   Future<Outcome<ModelReply>> _call(
     HttpClient http,
     AccessToken token,
     String body,
     Report report,
     String call,
+    Future<int?> contextWindow,
   ) async {
     final request = await http.postUrl(_endpoint);
     request.headers
@@ -122,16 +194,37 @@ final class ChatGptDriver implements AsksTheModel {
       return Refused('chatgpt: HTTP ${response.statusCode}${_errorOf(text)}');
     }
     final done = <int, String>{};
+    final arrived = StringBuffer();
+    // With `store: false` a response can list no output: then the done
+    // items are the reply, and failing those, what streamed.
+    String textOf(String? output) {
+      if (output != null) return output;
+      if (done.isEmpty) return '$arrived';
+      final keys = done.keys.toList()..sort();
+      return [for (final k in keys) done[k]].join();
+    }
+
     await for (final data in sseData(utf8.decoder.bind(response))) {
       switch (ResponsesEvent.parse(data)) {
         case TextArriving(:final text):
+          arrived.write(text);
           report(ReplyArriving(text));
         case ItemDone(:final index, :final text):
           done[index] = text;
-        case Completed(:final text):
-          final keys = done.keys.toList()..sort();
+        case Completed(:final text, :final spent):
           return Ran(
-            ModelReply(text ?? [for (final k in keys) done[k]].join()),
+            FinishedReply(
+              text: textOf(text),
+              usage: _usage(spent, await contextWindow),
+            ),
+          );
+        case CutOff(:final text, :final spent, :final reason):
+          _log('$call: cut off: $reason');
+          return Ran(
+            CutOffReply(
+              text: textOf(text),
+              usage: _usage(spent, await contextWindow),
+            ),
           );
         case Stopped(:final why):
           return Refused('chatgpt: $why');
