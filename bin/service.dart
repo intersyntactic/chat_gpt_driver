@@ -11,6 +11,10 @@
 /// holds one sign-in per file, which the driver rewrites on every refresh,
 /// so it must be the driver's own and closed to everyone else.
 ///
+/// With no sign-ins it will not start, unless `CHAT_GPT_DRIVER_ALLOW_NO_SIGN_INS=1`:
+/// then it listens and refuses every call, so a rehearsal can prove the
+/// binary, sandbox and socket without ever holding a live sign-in.
+///
 /// Exits 78 when it cannot start as configured, and closes cleanly on
 /// SIGTERM or SIGINT.
 library;
@@ -48,7 +52,15 @@ Future<void> main() async {
   } on Exception catch (e) {
     _fail('$e');
   }
-  if (signIns.isEmpty) _fail('no model sign-ins in $state');
+  // wire-ok: an environment variable, read once here.
+  final allowNoSignIns = switch (env['CHAT_GPT_DRIVER_ALLOW_NO_SIGN_INS']) {
+    null => false,
+    '1' => true,
+    final other => _fail('CHAT_GPT_DRIVER_ALLOW_NO_SIGN_INS is $other, not 1'),
+  };
+  if (signIns.isEmpty && !allowNoSignIns) {
+    _fail('no model sign-ins in $state');
+  }
   for (final MapEntry(key: name, value: file) in signIns.entries) {
     if (!file.signIn.canUsePlan) {
       _fail('$name was signed in without ${ChatGptSignIn.planScope}');

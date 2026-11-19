@@ -118,15 +118,25 @@ CHAT_GPT_DRIVER_SOCKET=/run/intersyntactic-chat-gpt-driver/chat-gpt-driver.sock 
 ```
 
 The unit needs `StateDirectory=intersyntactic-chat-gpt-driver` with
-`StateDirectoryMode=0700` and `UMask=0077`. At start it loads the sign-ins
-and prints one line:
+`StateDirectoryMode=0700`, which keeps the sign-ins from everyone else
+whatever their files' modes. The socket is reached the way
+claude_code_driver's is: `Group=` a callers group the airlock joins,
+`RuntimeDirectoryMode=0750` and `UMask=0007`, so the socket is
+group-writable. (`UMask=0077` would leave the airlock unable to connect.)
+Run one instance per state directory: refreshes are one at a time within a
+process, not across processes.
+
+At start it loads the sign-ins and prints one line:
 
 ```
 listening on <socket> for <caller>, model sign-ins: <names>
 ```
 
-Any configuration it cannot start with exits 78. SIGTERM and SIGINT close
-it cleanly.
+Any configuration it cannot start with exits 78, including a state
+directory with no sign-ins. `CHAT_GPT_DRIVER_ALLOW_NO_SIGN_INS=1` lets it
+start with none, listening and refusing every call: for a rehearsal that
+proves the binary, sandbox and socket without a live sign-in, never for the
+live unit. SIGTERM and SIGINT close it cleanly.
 
 The socket speaks exactly what claude_code_driver's does, is_effects'
 `encodeModelCall` / `ProgramMessage<ModelReply>`, so the airlock changes
