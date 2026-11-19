@@ -1,8 +1,12 @@
 /// Signs a host in with ChatGPT, run on a computer with a browser, and
-/// writes the sign-in to a file for that host:
+/// writes the sign-in for that host, named for its model sign-in:
 ///
-///     dart run is_chat_gpt_driver:sign_in <file>          # a new host
-///     dart run is_chat_gpt_driver:sign_in <file> --again  # sign it in again
+///     dart run is_chat_gpt_driver:sign_in <name>          # a new host
+///     dart run is_chat_gpt_driver:sign_in <name> --again  # sign it in again
+///
+/// The file is always `~/.config/intersyntactic/chat-gpt-driver/<name>`, in
+/// a directory closed to others and outside any checkout, so a commit can
+/// never pick a sign-in up.
 ///
 /// The redirect reaches `127.0.0.1` on this computer, not the host, so the
 /// browser part runs here and the file is then copied to the host over SSH;
@@ -20,6 +24,7 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:is_chat_gpt_driver/is_chat_gpt_driver.dart';
+import 'package:is_effects/is_effects.dart';
 
 final _authorize = Uri.parse('https://auth.openai.com/api/accounts/authorize');
 const _scopes =
@@ -29,14 +34,23 @@ const _agentName = 'intersyntactic chat_gpt_driver';
 const _unissued = 'dynamic_agent_client';
 
 Future<void> main(List<String> args) async {
-  final (path, again) = switch (args) {
-    [final path] => (path, false),
-    [final path, '--again'] => (path, true),
-    _ => _fail('usage: sign_in <file> [--again]'),
+  final (name, again) = switch (args) {
+    [final name] => (name, false),
+    [final name, '--again'] => (name, true),
+    _ => _fail('usage: sign_in <model sign-in name> [--again]'),
   };
+  final signInName =
+      ModelSignInName.parse(name) ??
+      _fail('$name is not a model sign-in name: a-z, 0-9, - and _');
+  final home = Platform.environment['HOME'] ?? _fail('HOME is not set');
+  final directory = Directory('$home/.config/intersyntactic/chat-gpt-driver');
+  await directory.create(recursive: true);
+  _chmod('700', directory.path);
+  final path = '${directory.path}/$signInName';
   final file = File(path);
   final ChatGptSignIn? previous;
   if (again) {
+    if (!file.existsSync()) _fail('no sign-in at $path to sign in again');
     previous = switch (Credential.parse(await file.readAsString())) {
       final ChatGptSignIn s => s,
     };
@@ -125,13 +139,13 @@ Future<void> main(List<String> args) async {
     }
     // Closed to others before a token is in it.
     await file.writeAsString('');
-    final chmod = await Process.run('chmod', ['600', path]);
-    if (chmod.exitCode != 0) _fail('chmod 600 $path: ${chmod.stderr}');
+    _chmod('600', path);
     await file.writeAsString(signIn.encode(), flush: true);
     stdout.writeln(
-      'Signed in, client $clientId, host $hostId. Copy it to the host now,\n'
-      'into the driver\'s StateDirectory, named for the model sign-in, then\n'
-      'delete this copy: the host\'s first refresh makes it stale.',
+      'Signed in, client $clientId, host $hostId, written to\n  $path\n'
+      'Copy it to the host now, into the driver\'s StateDirectory under the\n'
+      'same name, then delete this copy: the host\'s first refresh makes it '
+      'stale.',
     );
   } finally {
     await server.close(force: true);
@@ -175,6 +189,11 @@ String _b64(List<int> b) => base64Url.encode(b).replaceAll('=', '');
 final _rng = Random.secure();
 Uint8List _bytes(int n) =>
     Uint8List.fromList([for (var i = 0; i < n; i++) _rng.nextInt(256)]);
+
+void _chmod(String mode, String path) {
+  final r = Process.runSync('chmod', [mode, path]);
+  if (r.exitCode != 0) _fail('chmod $mode $path: ${r.stderr}');
+}
 
 Never _fail(String why) {
   stderr.writeln('sign_in: $why');
