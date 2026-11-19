@@ -1,0 +1,19 @@
+name: is_chat_gpt_driver
+description: >-
+  intersyntactic's ChatGPT driver: asks the model through a ChatGPT plan's
+  Responses API, writing every byte the model sees, and holding the plan's
+  rotating sign-in so no loop or record ever sees it.
+version: 0.1.0
+repository: https://github.com/intersyntactic/chat_gpt_driver
+publish_to: none
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  crypto: ^3.0.7
+  is_effects: ^0.8.0
+
+dev_dependencies:
+  lints: ^6.1.0
+  test: ^1.25.0
