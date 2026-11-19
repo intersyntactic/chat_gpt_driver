@@ -1,0 +1,146 @@
+# is_chat_gpt_driver
+
+intersyntactic's ChatGPT driver: the service that `AsksTheModel` (from
+[is_effects](https://github.com/intersyntactic/effects)) through a ChatGPT
+plan, by "Sign in with ChatGPT". Agent loops hold no model credential and
+have no network; they propose a call, the airlock decides it, and this
+driver is the only piece that reaches OpenAI.
+
+It exists because a driver that runs an agent CLI cannot say exactly what
+the model sees: `claude -p` adds its own environment block (working folder,
+OS, shell, date) to every request, and a model can repeat anything in its
+input. This driver writes every byte of the request body itself.
+
+## One call
+
+One streamed `POST https://api.openai.com/v1/responses` per call, with
+`Authorization: Bearer <access token>` and `accept: text/event-stream`. The
+body is exactly:
+
+```
+{"model":<model>,"instructions":<systemPrompt>,"store":false,"stream":true,"input":<request>}
+```
+
+- **`request` is the `input` array**, the turns of the conversation as
+  Responses API items, and goes into the body as its own bytes: not
+  decoded and re-encoded, so a hash of what the airlock approved is a hash
+  of what was sent. A request that is not a JSON array of objects, such as
+  a whole body, is refused without calling, so the model is only ever the
+  one decided. Plain text is one turn:
+  `[{"role":"user","content":"…"}]`.
+- **The system prompt is `instructions`.** The plan rejects a system-role
+  input item.
+- **Nothing else is sent.** Not `max_output_tokens` (the plan refuses it),
+  not a cache key, not tools. Measured in enspyrco/intersyntactic, "Reply
+  with OK." and "Hi" are 15 input tokens: nothing is added above the
+  system prompt.
+- **Streaming.** Each `response.output_text.delta` is reported as
+  `ReplyArriving`. The reply is the text of `response.completed`'s output,
+  or, when that lists none (it may with `store: false`), of the
+  `response.output_item.done` items in order. `response.failed`,
+  `response.incomplete` and `error` are `Refused` with their reason, as is
+  a stream that ends before `response.completed`: a dropped connection is
+  never a short reply.
+- **HTTP errors** are refused with their code, such as
+  `chatgpt: HTTP 429: subscription_sharing_usage_limit_exceeded: …`.
+- **Ten minutes** at most per call.
+
+Over HTTP a growing conversation barely hits the prompt cache;
+enspyrco/intersyntactic fixed that with one WebSocket per conversation. Not
+here yet: port it if a plan's allowance starts to run out.
+
+## Sign-ins
+
+A sign-in is OAuth with PKCE, and its refresh token **rotates on every
+refresh and the old one dies**. So a sign-in is state, not a fixed secret:
+
+- **Each in its own file**, in a directory the driver's user owns and
+  writes: systemd's `StateDirectory=`, never `LoadCredential=` (read-only).
+  The file is named for the model sign-in. The service refuses to start
+  when the directory is open to group or others.
+- **Written before use.** A refresh writes the new sign-in to a temporary
+  file beside the old and renames it over, then uses the new access token.
+- **One refresh at a time.** Calls that find a refresh due all wait on the
+  same one; two at once would spend the same refresh token and the second
+  would kill the sign-in. `test/sign_in_file_test.dart` pins this.
+- **When**: five minutes before the access token expires, never before the
+  reply's `earliest_refresh_at`, never within a minute of the last.
+- **A dead sign-in** (`refresh_token_reused`, `invalid_grant` and the like)
+  refuses every call until it is signed in again. A refresh that fails
+  otherwise keeps using the token in hand until it expires.
+- **No token is ever printed**: `toString()` is `a chatgpt-sign-in` or `an
+  access token`, and logs carry status codes, never bodies with tokens.
+
+A file is:
+
+```json
+{
+  "kind": "chatgpt-sign-in",
+  "client_id": "oaiapp_…",
+  "host_id": "urn:uuid:…",
+  "access_token": "…",
+  "refresh_token": "…",
+  "id_token": "…",
+  "expires_at": "2026-11-19T13:00:00.000Z",
+  "earliest_refresh_at": "2026-11-19T12:01:00.000Z",
+  "scopes": ["openid", "…", "chatgpt.tokens.use.direct"]
+}
+```
+
+A sign-in without `chatgpt.tokens.use.direct` is identity only and cannot
+spend the plan; the service will not start with one.
+
+### Signing a host in
+
+The OAuth redirect reaches `127.0.0.1` on the computer with the browser,
+not the host, so sign in on a laptop and copy the file over
+([OpenAI's self-hosted VM guide](https://developers.openai.com/siwc/token-sharing-open-source/self-hosted-vms)):
+
+```
+dart run is_chat_gpt_driver:sign_in cam-chatgpt
+scp cam-chatgpt host:/var/lib/intersyntactic-chat-gpt-driver/cam-chatgpt
+rm cam-chatgpt
+```
+
+Each host gets **its own sign-in**: a new client registration and a fresh
+`ext_agent_host_id`, never a copy of another app's. Two holders of one
+sign-in rotate each other's refresh token away. The host refreshes it from
+then on, so the laptop's copy is stale at the host's first refresh. A host
+whose sign-in has died is signed in again with `--again <file>`, which
+keeps its client and host id.
+
+## Running as its own service
+
+```
+CHAT_GPT_DRIVER_SOCKET=/run/intersyntactic-chat-gpt-driver/chat-gpt-driver.sock \
+  CHAT_GPT_DRIVER_CALLER=airlock \
+  dart run is_chat_gpt_driver:service   # STATE_DIRECTORY from StateDirectory=
+```
+
+The unit needs `StateDirectory=intersyntactic-chat-gpt-driver` with
+`StateDirectoryMode=0700` and `UMask=0077`. At start it loads the sign-ins
+and prints one line:
+
+```
+listening on <socket> for <caller>, model sign-ins: <names>
+```
+
+Any configuration it cannot start with exits 78. SIGTERM and SIGINT close
+it cleanly.
+
+The socket speaks exactly what claude_code_driver's does, is_effects'
+`encodeModelCall` / `ProgramMessage<ModelReply>`, so the airlock changes
+drivers by socket path alone. The service reads who is calling from the
+socket as the kernel reports it (`SO_PEERCRED`) and closes any other user's
+connection unanswered:
+
+```
+→ {"signIn":"cam-chatgpt","model":"gpt-6.1-sol","systemPrompt":"…","request":"[{\"role\":\"user\",\"content\":\"Hi\"}]"}
+← {"kind":"reported","progress":{"kind":"replyArriving","text":"…"}}   (any number)
+← {"kind":"finished","outcome":{"kind":"ran","output":"<the reply>"}}
+← {"kind":"finished","outcome":{"kind":"refused","why":"…"}}
+```
+
+The airlock side is `ChatGptDriverSocket` from
+`package:is_chat_gpt_driver/service.dart`. It `AsksTheModel` and holds no
+secret.
