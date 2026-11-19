@@ -98,9 +98,14 @@ not the host, so sign in on a laptop and copy the file over
 
 ```
 dart run is_chat_gpt_driver:sign_in cam-chatgpt
-scp cam-chatgpt host:/var/lib/intersyntactic-chat-gpt-driver/cam-chatgpt
-rm cam-chatgpt
+scp ~/.config/intersyntactic/chat-gpt-driver/cam-chatgpt \
+  host:/var/lib/intersyntactic-chat-gpt-driver/cam-chatgpt
+rm ~/.config/intersyntactic/chat-gpt-driver/cam-chatgpt
 ```
+
+`sign_in` takes the model sign-in's name, never a path, and always writes
+to `~/.config/intersyntactic/chat-gpt-driver/` (mode 0700), outside any
+checkout, so a sign-in can't be committed by accident.
 
 Each host gets **its own sign-in**: a new client registration and a fresh
 `ext_agent_host_id`, never a copy of another app's. Two holders of one
