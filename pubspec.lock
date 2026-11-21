@@ -161,6 +161,15 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.1.0"
+  is_unix_socket_user_check:
+    dependency: "direct main"
+    description:
+      path: "."
+      ref: ca0ac00833c5d7474f84375b46708a6c4a955a6a
+      resolved-ref: ca0ac00833c5d7474f84375b46708a6c4a955a6a
+      url: "https://github.com/intersyntactic/unix_socket_user_check"
+    source: git
+    version: "0.1.0"
   lints:
     dependency: "direct dev"
     description:

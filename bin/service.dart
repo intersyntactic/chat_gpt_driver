@@ -25,6 +25,7 @@ import 'dart:io';
 import 'package:is_chat_gpt_driver/is_chat_gpt_driver.dart';
 import 'package:is_chat_gpt_driver/service.dart';
 import 'package:is_effects/is_effects.dart';
+import 'package:is_unix_socket_user_check/is_unix_socket_user_check.dart';
 
 Future<void> main() async {
   final env = Platform.environment;
@@ -36,7 +37,10 @@ Future<void> main() async {
     ])
       env[name] ?? _fail('$name is not set'),
   ];
-  final uid = _uidOf(caller) ?? _fail('no user $caller');
+  final number = _uidOf(caller) ?? _fail('no user $caller');
+  final uid =
+      UserId.parse(number) ??
+      _fail('$caller is uid $number, which names no one user');
   final directory = Directory(state);
   final stat = directory.statSync();
   if (stat.type != FileSystemEntityType.directory) {
