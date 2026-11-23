@@ -1,14 +1,28 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:is_effects/is_effects.dart';
+import 'package:is_unix_socket_user_check/is_unix_socket_user_check.dart';
 
 import 'responses_event.dart';
 import 'sign_in_file.dart';
 
-/// [AsksTheModel] through a ChatGPT plan: one streamed POST to the
-/// Responses API per call, signed in as the sign-in the call names.
+/// The ChatGPT driver: a service on a Unix socket that asks the model
+/// through a ChatGPT plan, one streamed POST to the Responses API per call,
+/// signed in as the sign-in the call names, for the airlock's user alone.
+///
+/// A caller connects, writes one call as JSON and closes its side:
+///
+///     {"signIn":"…","model":"…","systemPrompt":"…","request":"…"}
+///
+/// The driver answers one JSON line per message and closes: any number of
+/// `{"kind":"reported","progress":…}` while the reply streams, then one
+/// `{"kind":"finished","outcome":…}`, the `Outcome<ModelReply>`. Who is
+/// calling is read from the socket as the kernel reports it, never from the
+/// call. It runs as its own user, so a sign-in's tokens are readable and
+/// writable by this process and no other.
 ///
 /// `request` is the Responses API `input`: a JSON array of the turns, sent
 /// as its exact bytes. The driver writes the rest of the body itself, and
@@ -16,15 +30,43 @@ import 'sign_in_file.dart';
 /// and `stream: true` ([body]). A request that is not an array, such as a
 /// whole body, is refused, so the model called is only ever the one
 /// decided.
-final class ChatGptDriver implements AsksTheModel {
-  ChatGptDriver(
+final class ChatGptDriver {
+  ChatGptDriver._(
+    this._signIns,
+    this._endpoint,
+    this._limit,
+    this._log,
+    this._socketUserCheck,
+    this._socket,
+    this._server,
+  );
+
+  /// Listens on [socket] for the user [caller] alone, asking the model as
+  /// the sign-ins in [signIns] at [endpoint], the Responses API by default.
+  /// [limit] is how long one call may run; [socketUserReader] reads each
+  /// caller's user from the kernel, the running kernel's by default. A
+  /// socket file nothing listens on is replaced.
+  static Future<ChatGptDriver> start(
     Map<ModelSignInName, SignInFile> signIns, {
+    required UserId caller,
+    required File socket,
     Uri? endpoint,
-    this._limit = const Duration(minutes: 10),
+    Duration limit = const Duration(minutes: 10),
     void Function(String line)? log,
-  }) : _signIns = Map.unmodifiable(signIns),
-       _endpoint = endpoint ?? Uri.parse('https://api.openai.com/v1/responses'),
-       _log = log ?? _silent;
+    SocketUserReader? socketUserReader,
+  }) async {
+    final driver = ChatGptDriver._(
+      Map.unmodifiable(signIns),
+      endpoint ?? Uri.parse('https://api.openai.com/v1/responses'),
+      limit,
+      log ?? _silent,
+      SocketUserCheck.only(caller, reader: socketUserReader),
+      socket,
+      await _bind(socket),
+    );
+    driver._server.listen(driver._serve);
+    return driver;
+  }
 
   final Map<ModelSignInName, SignInFile> _signIns;
   final Uri _endpoint;
@@ -36,7 +78,89 @@ final class ChatGptDriver implements AsksTheModel {
   /// runs the driver, not the record. Never a token.
   final void Function(String line) _log;
 
+  final SocketUserCheck _socketUserCheck;
+  final File _socket;
+  final ServerSocket _server;
+
   static void _silent(String _) {}
+
+  /// A whole trajectory as an input array fits well inside this.
+  static const maxCall = 16 << 20;
+
+  static Future<ServerSocket> _bind(File socket) async {
+    final address = InternetAddress(
+      socket.path,
+      type: InternetAddressType.unix,
+    );
+    if (socket.existsSync()) {
+      try {
+        (await Socket.connect(address, 0)).destroy();
+        throw StateError('a service is already listening on ${socket.path}');
+      } on SocketException {
+        socket.deleteSync();
+      }
+    }
+    return ServerSocket.bind(address, 0);
+  }
+
+  Future<void> close() async {
+    await _server.close();
+    if (_socket.existsSync()) _socket.deleteSync();
+  }
+
+  Future<void> _serve(Socket socket) async {
+    try {
+      if (!_socketUserCheck.allows(socket)) {
+        socket.destroy();
+        return;
+      }
+      final bytes = BytesBuilder(copy: false);
+      var tooLarge = false;
+      await for (final chunk in socket) {
+        if (bytes.length + chunk.length > maxCall) {
+          tooLarge = true;
+          break;
+        }
+        bytes.add(chunk);
+      }
+      if (tooLarge) {
+        _write(socket, const Finished(Refused('call too large')));
+        await socket.close();
+        return;
+      }
+      final ModelSignInName signIn;
+      final ModelName model;
+      final String systemPrompt;
+      final String request;
+      try {
+        (signIn, model, systemPrompt, request) = decodeModelCall(
+          jsonDecode(utf8.decode(bytes.takeBytes(), allowMalformed: true)),
+        );
+      } on FormatException catch (e) {
+        _write(socket, Finished(Refused('not a call: ${e.message}')));
+        await socket.close();
+        return;
+      }
+      final outcome = await _ask(
+        signIn,
+        model,
+        systemPrompt,
+        request,
+        (progress) => _write(socket, Reported(progress)),
+      );
+      _write(socket, Finished(outcome));
+      await socket.close();
+    } on SocketException {
+      socket.destroy();
+    }
+  }
+
+  static void _write(Socket socket, ProgramMessage<ModelReply> message) =>
+      socket.add(
+        utf8.encode(
+          '${jsonEncode(encodeProgramMessage(message, encodeModelReply))}\n',
+        ),
+      );
 
   /// The whole body for one call, [input] spliced in as its own bytes.
   /// [input] must already be a JSON array ([whyNotInput]).
@@ -65,14 +189,13 @@ final class ChatGptDriver implements AsksTheModel {
     };
   }
 
-  @override
-  Future<Outcome<ModelReply>> askTheModel(
+  Future<Outcome<ModelReply>> _ask(
     ModelSignInName signIn,
     ModelName model,
     String systemPrompt,
-    String request, {
-    required Report report,
-  }) async {
+    String request,
+    Report report,
+  ) async {
     final file = _signIns[signIn];
     if (file == null) return Refused('no model sign-in $signIn');
     if (whyNotInput(request) case final why?) return Refused(why);
