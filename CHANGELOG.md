@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.2
+
+- is_effects ^0.14.2, which moves the web-address types into `is_web_address_vocabulary` and re-exports them. The driver uses none of them; no behaviour change.
+
 ## 0.2.1
 
 - is_effects ^0.14.1. Its breaking changes since 0.9.0 (file reads, web requests, program names) touch nothing the driver uses; the model call, `ModelReply` and `ProgramMessage` codecs are unchanged.
