@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+- is_effects ^0.14.1. Its breaking changes since 0.9.0 (file reads, web requests, program names) touch nothing the driver uses; the model call, `ModelReply` and `ProgramMessage` codecs are unchanged.
+
 ## 0.2.0
 
 - **Breaking:** one class, `ChatGptDriver`, is the driver and owns its socket: `ChatGptDriver.start(signIns, caller:, socket:, …)` binds and serves, and `close()` stops it. `ChatGptDriverService` is gone, and `ChatGptDriver` no longer implements `AsksTheModel`: the only way to ask it is over the socket.
