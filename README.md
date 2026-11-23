@@ -1,8 +1,7 @@
 # is_chat_gpt_driver
 
-intersyntactic's ChatGPT driver: the service that `AsksTheModel` (from
-[is_effects](https://github.com/intersyntactic/effects)) through a ChatGPT
-plan, by "Sign in with ChatGPT". Agent loops hold no model credential and
+intersyntactic's ChatGPT driver: a service on a Unix socket that asks the
+model through a ChatGPT plan, by "Sign in with ChatGPT". Agent loops hold no model credential and
 have no network; they propose a call, the airlock decides it, and this
 driver is the only piece that reaches OpenAI.
 
@@ -137,8 +136,8 @@ CHAT_GPT_DRIVER_SOCKET=/run/intersyntactic-chat-gpt-driver/chat-gpt-driver.sock 
 
 The unit needs `StateDirectory=intersyntactic-chat-gpt-driver` with
 `StateDirectoryMode=0700`, which keeps the sign-ins from everyone else
-whatever their files' modes. The socket is reached the way
-claude_code_driver's is: `Group=` a callers group the airlock joins,
+whatever their files' modes. The airlock reaches the socket through
+`Group=`, a callers group it joins, with
 `RuntimeDirectoryMode=0750` and `UMask=0007`, so the socket is
 group-writable. (`UMask=0077` would leave the airlock unable to connect.)
 Run one instance per state directory: refreshes are one at a time within a
@@ -156,11 +155,10 @@ start with none, listening and refusing every call: for a rehearsal that
 proves the binary, sandbox and socket without a live sign-in, never for the
 live unit. SIGTERM and SIGINT close it cleanly.
 
-The socket speaks exactly what claude_code_driver's does, is_effects'
-`encodeModelCall` / `ProgramMessage<ModelReply>`, so the airlock changes
-drivers by socket path alone. The service reads who is calling from the
-socket as the kernel reports it (`SO_PEERCRED`) and closes any other user's
-connection unanswered:
+The service reads who is calling from the socket as the kernel reports it
+(`SO_PEERCRED`) and closes any other user's connection unanswered. A caller
+writes one call as JSON and closes its side; the service answers one JSON
+line per message and closes:
 
 ```
 → {"signIn":"cam-chatgpt","model":"gpt-6.1-sol","systemPrompt":"…","request":"[{\"role\":\"user\",\"content\":\"Hi\"}]"}
@@ -169,6 +167,11 @@ connection unanswered:
 ← {"kind":"finished","outcome":{"kind":"refused","why":"…"}}
 ```
 
-The airlock side is `ChatGptDriverSocket` from
-`package:is_chat_gpt_driver/service.dart`. It `AsksTheModel` and holds no
-secret.
+`{}` is a probe that never reaches the model:
+
+```
+← {"kind":"finished","outcome":{"kind":"refused","why":"not a call: modelCall.signIn: not a string"}}
+```
+
+The package holds no client for this wire: each caller, the airlock
+included, writes its own, and holds no secret.

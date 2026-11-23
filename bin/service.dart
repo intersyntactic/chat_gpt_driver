@@ -1,5 +1,5 @@
-/// Runs the ChatGPT driver as a service (see
-/// `package:is_chat_gpt_driver/service.dart`):
+/// Runs the ChatGPT driver, a service on a Unix socket that carries out
+/// model calls for one user:
 ///
 ///     CHAT_GPT_DRIVER_SOCKET=/run/intersyntactic-chat-gpt-driver/chat-gpt-driver.sock \
 ///       CHAT_GPT_DRIVER_CALLER=airlock \
@@ -23,7 +23,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:is_chat_gpt_driver/is_chat_gpt_driver.dart';
-import 'package:is_chat_gpt_driver/service.dart';
 import 'package:is_effects/is_effects.dart';
 import 'package:is_unix_socket_user_check/is_unix_socket_user_check.dart';
 
@@ -70,12 +69,13 @@ Future<void> main() async {
       _fail('$name was signed in without ${ChatGptSignIn.planScope}');
     }
   }
-  final ChatGptDriverService service;
+  final ChatGptDriver driver;
   try {
-    service = await ChatGptDriverService.start(
-      ChatGptDriver(signIns, log: stdout.writeln),
-      uid,
-      File(socket),
+    driver = await ChatGptDriver.start(
+      signIns,
+      caller: uid,
+      socket: File(socket),
+      log: stdout.writeln,
     );
   } on Object catch (e) {
     _fail('$e');
@@ -91,7 +91,7 @@ Future<void> main() async {
     });
   }
   await stop.future;
-  await service.close();
+  await driver.close();
   exit(0);
 }
 

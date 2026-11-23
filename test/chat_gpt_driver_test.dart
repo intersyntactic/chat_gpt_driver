@@ -1,9 +1,13 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:is_chat_gpt_driver/is_chat_gpt_driver.dart';
 import 'package:is_effects/is_effects.dart';
+import 'package:is_unix_socket_user_check/is_unix_socket_user_check.dart';
 import 'package:test/test.dart';
+
+import 'start_driver.dart';
 
 final cam = ModelSignInName.parse('cam-chatgpt')!;
 final gpt = ModelName.parse('gpt-6.1-sol')!;
@@ -14,7 +18,9 @@ typedef Seen = ({Map<String, String> headers, List<int> body});
 void main() {
   late HttpServer server;
   late Directory dir;
-  late ChatGptDriver driver;
+  late Map<ModelSignInName, SignInFile> signIns;
+  late Uri endpoint;
+  late File socket;
   final seen = <Seen>[];
   // What the fake answers: a status and a body.
   late (int, String) answer;
@@ -69,13 +75,15 @@ void main() {
       scopes: const [ChatGptSignIn.planScope],
       now: DateTime.now(),
     );
-    driver = ChatGptDriver({
+    signIns = {
       cam: SignInFile(
         File('${dir.path}/cam-chatgpt'),
         signIn,
         refresh: (_) => fail('refreshed'),
       ),
-    }, endpoint: Uri.parse('http://127.0.0.1:${server.port}/v1/responses'));
+    };
+    endpoint = Uri.parse('http://127.0.0.1:${server.port}/v1/responses');
+    socket = await startDriver(signIns, endpoint: endpoint);
   });
   tearDown(() async {
     await server.close(force: true);
@@ -92,16 +100,24 @@ void main() {
     ],
   };
 
-  Future<(Outcome<ModelReply>, List<String>)> ask(String request) async {
-    final pieces = <String>[];
-    final out = await driver.askTheModel(
-      cam,
-      gpt,
-      'You are Cam.',
+  /// Asks over the socket as [signIn] for [model], cam for gpt by default.
+  Future<(Outcome<ModelReply>, List<String>)> ask(
+    String request, {
+    ModelSignInName? signIn,
+    ModelName? model,
+    String systemPrompt = 'You are Cam.',
+  }) async {
+    final (out, reported) = await callOverSocket(
+      socket,
+      signIn ?? cam,
+      model ?? gpt,
+      systemPrompt,
       request,
-      report: (p) => pieces.add((p as ReplyArriving).text),
     );
-    return (out, pieces);
+    return (
+      out ?? fail('hung up on'),
+      [for (final p in reported) (p as ReplyArriving).text],
+    );
   }
 
   test('sends the approved input as its own bytes, and nothing else', () async {
@@ -244,21 +260,15 @@ void main() {
       await ask('[{"role":"user","content":"Hi"}]');
       await ask('[{"role":"user","content":"Hi"}]');
       expect(modelLookups, 1);
-      final out = await driver.askTheModel(
-        cam,
-        ModelName.parse('gpt-6.2-astra')!,
-        '',
+      final (out, _) = await ask(
         '[{"role":"user","content":"Hi"}]',
-        report: (_) {},
+        model: ModelName.parse('gpt-6.2-astra'),
       );
       expect(modelLookups, 1, reason: 'the first read listed it already');
       expect((out as Ran<ModelReply>).output.usage!.contextWindow, 272000);
-      final unseen = await driver.askTheModel(
-        cam,
-        ModelName.parse('gpt-6.3-sol')!,
-        '',
+      final (unseen, _) = await ask(
         '[{"role":"user","content":"Hi"}]',
-        report: (_) {},
+        model: ModelName.parse('gpt-6.3-sol'),
       );
       expect(modelLookups, 2);
       expect((unseen as Ran<ModelReply>).output.usage!.contextWindow, isNull);
@@ -353,13 +363,107 @@ void main() {
   }
 
   test('refuses a sign-in it does not hold', () async {
-    final out = await driver.askTheModel(
-      ModelSignInName.parse('someone-else')!,
-      gpt,
-      '',
+    final (out, _) = await ask(
       '[{"role":"user","content":"Hi"}]',
-      report: (_) {},
+      signIn: ModelSignInName.parse('someone-else'),
     );
     expect((out as Refused).why, 'no model sign-in someone-else');
+  });
+
+  group('the socket', () {
+    const hi = '[{"role":"user","content":"Hi"}]';
+
+    test('answers the probe {} without asking the model', () async {
+      expect(
+        await rawCall(socket, '{}'),
+        '{"kind":"finished","outcome":{"kind":"refused",'
+        '"why":"not a call: modelCall.signIn: not a string"}}',
+      );
+      expect(seen, isEmpty);
+    });
+
+    test('refuses a sign-in that is not a name', () async {
+      expect(
+        await rawCall(
+          socket,
+          '{"signIn":"Nick!","model":"m","systemPrompt":"","request":"x"}',
+        ),
+        contains('not a call: modelCall.signIn: not a model sign-in'),
+      );
+      expect(seen, isEmpty);
+    });
+
+    test('refuses a call too large to carry', () async {
+      expect(
+        await rawCall(socket, ' ' * (ChatGptDriver.maxCall + 1)),
+        contains('call too large'),
+      );
+      expect(seen, isEmpty);
+    });
+
+    // A refused caller is hung up on, sometimes before its call is written:
+    // a broken pipe and an empty answer both count as no answer.
+    test('closes on any other user, unanswered', () async {
+      final other = await startDriver(
+        signIns,
+        endpoint: endpoint,
+        caller: UserId.parse(me.number + 1),
+      );
+      final (out, reported) = await callOverSocket(other, cam, gpt, '', hi);
+      expect(out, isNull);
+      expect(reported, isEmpty);
+      expect(seen, isEmpty);
+    });
+
+    // The kernel's answer is faked, so each case runs on any platform.
+    final unreadable = {
+      'a Linux answer too short to hold a uid': SocketUserReader(
+        kernel: Kernel.linux,
+        readOption: (_, _) => Uint8List(4),
+      ),
+      'the overflow uid on Linux': SocketUserReader(
+        kernel: Kernel.linux,
+        readOption: (_, _) =>
+            Uint8List(12)..buffer.asByteData().setUint32(4, 65534, Endian.host),
+        overflowUid: () => 65534,
+      ),
+      'a kernel it cannot read': SocketUserReader(kernel: Kernel.other),
+    };
+    for (final MapEntry(key: what, value: reader) in unreadable.entries) {
+      test('closes on $what, unanswered', () async {
+        final faked = await startDriver(
+          signIns,
+          endpoint: endpoint,
+          socketUserReader: reader,
+        );
+        final (out, _) = await callOverSocket(faked, cam, gpt, '', hi);
+        expect(out, isNull);
+        expect(seen, isEmpty);
+      });
+    }
+
+    test('asks for its caller as a faked kernel reports it', () async {
+      answer = (200, sse([completed('OK', usage)]));
+      final faked = await startDriver(
+        signIns,
+        endpoint: endpoint,
+        socketUserReader: SocketUserReader(
+          kernel: Kernel.linux,
+          readOption: (_, _) =>
+              Uint8List(12)
+                ..buffer.asByteData().setUint32(4, me.number, Endian.host),
+          overflowUid: () => 65534,
+        ),
+      );
+      final (out, _) = await callOverSocket(faked, cam, gpt, '', hi);
+      expect((out! as Ran<ModelReply>).output.text, 'OK');
+    });
+
+    test('will not start over a socket something listens on', () async {
+      expect(
+        () => ChatGptDriver.start(signIns, caller: me, socket: socket),
+        throwsStateError,
+      );
+    });
   });
 }
