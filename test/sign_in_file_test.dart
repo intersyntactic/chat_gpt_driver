@@ -185,8 +185,14 @@ void main() {
       now: () => now,
     );
     now = t0.add(const Duration(hours: 1));
-    expect((await f.accessToken() as Refused).why, startsWith('sign in again'));
-    expect((await f.accessToken() as Refused).why, startsWith('sign in again'));
+    expect(
+      (await f.accessToken() as NothingRan).why,
+      startsWith('sign in again'),
+    );
+    expect(
+      (await f.accessToken() as NothingRan).why,
+      startsWith('sign in again'),
+    );
     expect(refreshes, 1);
   });
 
@@ -201,7 +207,7 @@ void main() {
     now = t0.add(const Duration(minutes: 58));
     expect(tokenOf(await f.accessToken()), 'access-1');
     now = t0.add(const Duration(hours: 1));
-    expect(await f.accessToken(), isA<Refused>());
+    expect(await f.accessToken(), isA<NothingRan>());
   });
 
   test('refuses a sign-in without the plan scope, never calling', () async {
@@ -212,7 +218,7 @@ void main() {
       now: () => now,
     );
     expect(
-      (await f.accessToken() as Refused).why,
+      (await f.accessToken() as NothingRan).why,
       contains(ChatGptSignIn.planScope),
     );
   });

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0
+
+- **Breaking:** is_effects ^0.15.0. `Refused` is gone, and every failure says whether anything reached OpenAI: `NothingRan` before the POST (a bad call, an unknown sign-in, a bad request, a sign-in that can't give a token), `StoppedPartway` (with `done` null) from the POST on (any HTTP error status, a failed or truncated stream, a timeout, a lost connection). A caller must move to is_effects 0.15.0 before this driver is deployed: an older one can't read `nothingRan` or `stoppedPartway`. The `{}` probe now answers `{"kind":"nothingRan",…}`.
+- `request` may be a `{tools, turns}` `ModelRequest` (is_model_vocabulary ^0.2.0). The driver builds `input` and `tools` from it with the same bytes every time, offers tools with `strict: false`, and asks for `reasoning.encrypted_content`. A JSON array is still taken as the `input` itself, as before.
+- A reply that calls tools is a `ProposedToolCalls`: each `function_call`'s `call_id`, its name as sent, and its arguments text unchanged, with the reply's reasoning items kept as a `ProviderContinuation`. The driver runs nothing. A `ToolAnswered` turn goes back as a `function_call_output` whose first line, `[tool ran]`, `[tool failed]` or `[refused by the airlock: nothing ran]`, only the driver writes.
+
 ## 0.2.5
 
 - A successful token refresh logs one line once the new sign-in is written: `<sign-in file>: refreshed, good until <expires_at>`. It holds no token. Before, only a failed refresh logged anything, so the journal couldn't show that one had happened. If the write fails, the existing `refreshed but not written` line is logged instead, never both.

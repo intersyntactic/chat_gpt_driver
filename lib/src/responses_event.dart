@@ -41,7 +41,7 @@ sealed class ResponsesEvent {
       'output_index': final int index,
       'item': final Object? item,
     } =>
-      ItemDone(index, _text(item)),
+      ItemDone(index, OutputItem.parse(item)),
     {'type': 'response.completed', 'response': final Object? response} =>
       Completed(_output(response), _spent(response)),
     {'type': 'response.incomplete', 'response': final Object? response} =>
@@ -63,10 +63,11 @@ sealed class ResponsesEvent {
     _ => const Unreadable(),
   };
 
-  /// The text of a response's output, or null when it lists none.
-  static String? _output(Object? response) => switch (response) {
-    {'output': final List<Object?> output} when output.isNotEmpty =>
-      output.map(_text).join(),
+  /// A response's output items, or null when it lists none.
+  static List<OutputItem>? _output(Object? response) => switch (response) {
+    {'output': final List<Object?> output} when output.isNotEmpty => [
+      for (final item in output) OutputItem.parse(item),
+    ],
     _ => null,
   };
 
@@ -104,20 +105,6 @@ sealed class ResponsesEvent {
     return null;
   }
 
-  /// The text of one output item: a message's text and refusal parts in
-  /// order; any other item, such as reasoning, has none.
-  static String _text(Object? item) => switch (item) {
-    {'type': 'message', 'content': final List<Object?> content} => [
-      for (final part in content)
-        switch (part) {
-          {'type': 'output_text', 'text': final String text} => text,
-          {'type': 'refusal', 'refusal': final String text} => text,
-          _ => '',
-        },
-    ].join(),
-    _ => '',
-  };
-
   static String _error(Object? error) => _words(switch (error) {
     {'code': final String code, 'message': final String message} =>
       '$code: $message',
@@ -137,12 +124,68 @@ final class TextArriving extends ResponsesEvent {
   final String text;
 }
 
-/// Output item [index] is whole, and holds [text]. With `store: false` the
-/// completed response can list no output, and these are the reply.
+/// Output item [index] is whole. With `store: false` the completed response
+/// can list no output, and these are the reply.
 final class ItemDone extends ResponsesEvent {
-  const ItemDone(this.index, this.text);
+  const ItemDone(this.index, this.item);
   final int index;
+  final OutputItem item;
+}
+
+/// One item of a response's output, read once here.
+sealed class OutputItem {
+  const OutputItem();
+
+  static OutputItem parse(Object? item) => switch (item) {
+    {'type': 'message', 'content': final List<Object?> content} => SaidItem(
+      [
+        for (final part in content)
+          switch (part) {
+            {'type': 'output_text', 'text': final String text} => text,
+            {'type': 'refusal', 'refusal': final String text} => text,
+            _ => '',
+          },
+      ].join(),
+    ),
+    {
+      'type': 'function_call',
+      'call_id': final String callId,
+      'name': final String name,
+      'arguments': final String arguments,
+    } =>
+      CallItem(callId, name, arguments),
+    {'type': 'reasoning'} && final Map<String, Object?> json => ReasoningItem(
+      json,
+    ),
+    _ => const OtherItem(),
+  };
+}
+
+/// A message: its text and refusal parts, in order.
+final class SaidItem extends OutputItem {
+  const SaidItem(this.text);
   final String text;
+}
+
+/// A proposed call: [callId] (never the item's own `fc_` id), the tool
+/// name as the model wrote it, and its [arguments] as the text that came.
+final class CallItem extends OutputItem {
+  const CallItem(this.callId, this.name, this.arguments);
+  final String callId;
+  final String name;
+  final String arguments;
+}
+
+/// The model's reasoning, which under `store: false` must be sent back,
+/// as it came, ahead of the calls it led to.
+final class ReasoningItem extends OutputItem {
+  const ReasoningItem(this.json);
+  final Map<String, Object?> json;
+}
+
+/// Anything else, which carries nothing the reply needs.
+final class OtherItem extends OutputItem {
+  const OtherItem();
 }
 
 /// What one call spent, each count separate: [input] holds neither
@@ -150,19 +193,19 @@ final class ItemDone extends ResponsesEvent {
 /// say.
 typedef Spent = ({int input, int cached, int output, int? cacheWritten});
 
-/// The reply is whole. [text] is its output's text, or null when the
-/// response listed no output.
+/// The reply is whole. [output] is its items, or null when the response
+/// listed none.
 final class Completed extends ResponsesEvent {
-  const Completed(this.text, this.spent);
-  final String? text;
+  const Completed(this.output, this.spent);
+  final List<OutputItem>? output;
   final Spent? spent;
 }
 
 /// The reply stopped before the model was done, because [reason] (such as
-/// `max_output_tokens`), but tokens were spent and [text] came back.
+/// `max_output_tokens`), but tokens were spent and [output] came back.
 final class CutOff extends ResponsesEvent {
-  const CutOff(this.text, this.spent, this.reason);
-  final String? text;
+  const CutOff(this.output, this.spent, this.reason);
+  final List<OutputItem>? output;
   final Spent? spent;
   final String reason;
 }

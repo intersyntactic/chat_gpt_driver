@@ -1,0 +1,139 @@
+import 'dart:convert';
+
+import 'package:is_effects/is_effects.dart';
+import 'package:is_model_vocabulary/is_model_vocabulary.dart'
+    show
+        AgentCalledTools,
+        AgentSaid,
+        ModelRequest,
+        ToolAnswered,
+        ToolFailed,
+        ToolRan,
+        ToolRefused,
+        ToolResult,
+        UserSaid;
+
+/// The whole Responses API body for one call. The driver writes everything
+/// but the turns itself, so the model called is only ever the one decided.
+///
+/// [request] takes one of two shapes:
+/// - a `{tools, turns}` [ModelRequest], from which `input` and `tools` are
+///   built, the same bytes for the same request every time, since a replay
+///   is matched byte for byte;
+/// - a JSON array, the Responses `input` itself, spliced in as its own
+///   bytes, as every request was before tools.
+///
+/// A request that is neither is a [FormatException] saying why.
+String responsesBody(ModelName model, String systemPrompt, String request) {
+  final Object? json;
+  try {
+    json = jsonDecode(request);
+  } on FormatException {
+    throw const FormatException('request is not JSON');
+  }
+  return switch (json) {
+    List<Object?>(isEmpty: true) => throw const FormatException(
+      'request is an empty input',
+    ),
+    final List<Object?> items when items.every((i) => i is Map) =>
+      '{"model":${jsonEncode(model.value)},'
+          '"instructions":${jsonEncode(systemPrompt)},'
+          '"store":false,"stream":true,'
+          '"input":$request}',
+    List<Object?>() => throw const FormatException(
+      'request holds an input item that is not an object',
+    ),
+    Map<String, Object?>() => _fromTurns(
+      model,
+      systemPrompt,
+      ModelRequest.decode(request),
+    ),
+    _ => throw const FormatException(
+      'request is neither {tools, turns} nor an input array',
+    ),
+  };
+}
+
+String _fromTurns(ModelName model, String systemPrompt, ModelRequest request) {
+  if (request.turns.isEmpty) {
+    throw const FormatException('request has no turns');
+  }
+  return jsonEncode({
+    'model': model.value,
+    'instructions': systemPrompt,
+    'store': false,
+    'stream': true,
+    // Without this, store:false gives reasoning items with nothing in
+    // them to send back, and the model loses its reasoning at every call.
+    'include': ['reasoning.encrypted_content'],
+    if (request.tools.isNotEmpty)
+      'tools': [
+        for (final tool in request.tools)
+          {
+            'type': 'function',
+            'name': tool.name.value,
+            'description': tool.description,
+            'parameters': tool.inputSchema.asUncheckedMap(),
+            'strict': false,
+          },
+      ],
+    'input': [
+      for (final turn in request.turns)
+        ...switch (turn) {
+          UserSaid(:final text) => [_message('user', text)],
+          AgentSaid(:final text) => [_message('assistant', text)],
+          AgentCalledTools(:final text, :final calls, :final continuation) => [
+            ...?_continued(continuation?.text),
+            if (text.isNotEmpty) _message('assistant', text),
+            for (final call in calls)
+              {
+                'type': 'function_call',
+                'call_id': call.id.value,
+                'name': call.name.asSent,
+                'arguments': call.input.text,
+              },
+          ],
+          ToolAnswered(:final callId, :final result) => [
+            {
+              'type': 'function_call_output',
+              'call_id': callId.value,
+              'output': toolOutput(result),
+            },
+          ],
+        },
+    ],
+  });
+}
+
+Map<String, Object?> _message(String role, String text) => {
+  'role': role,
+  'content': text,
+};
+
+/// The items a continuation holds, sent back unchanged ahead of the calls
+/// they led to.
+List<Object?>? _continued(String? text) => switch (text) {
+  null => null,
+  _ => switch (jsonDecode(text)) {
+    final List<Object?> items when items.every((i) => i is Map) => items,
+    _ => throw const FormatException(
+      'a continuation that is not a list of items',
+    ),
+  },
+};
+
+/// How a tool's result reads to the model. A `function_call_output` has no
+/// error flag, so every output starts with one of these lines, written by
+/// the driver alone. The first line is always the driver's, never the
+/// tool's text, so a fetched page that says "refused" can't pass as the
+/// airlock refusing.
+const ranLine = '[tool ran]';
+const failedLine = '[tool failed]';
+const refusedLine = '[refused by the airlock: nothing ran]';
+
+/// [result] as `function_call_output` text.
+String toolOutput(ToolResult result) => switch (result) {
+  ToolRan(:final text) => '$ranLine\n$text',
+  ToolFailed(:final text) => '$failedLine\n$text',
+  ToolRefused(:final why) => '$refusedLine\n$why',
+};
