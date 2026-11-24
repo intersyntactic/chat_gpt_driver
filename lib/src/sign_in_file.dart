@@ -100,9 +100,9 @@ final class SignInFile {
 
   /// An access token that is good now, refreshing first when one is due.
   Future<Outcome<AccessToken>> accessToken() async {
-    if (_dead case final why?) return Refused('sign in again: $why');
+    if (_dead case final why?) return NothingRan('sign in again: $why');
     if (!_signIn.canUsePlan) {
-      return Refused('signed in without ${ChatGptSignIn.planScope}');
+      return NothingRan('signed in without ${ChatGptSignIn.planScope}');
     }
     if (_now().isBefore(_signIn.refreshAt)) {
       return Ran(AccessToken._(_signIn.accessToken));
@@ -142,20 +142,20 @@ final class SignInFile {
           );
         }
         if (!after.canUsePlan) {
-          return Refused('refreshed without ${ChatGptSignIn.planScope}');
+          return NothingRan('refreshed without ${ChatGptSignIn.planScope}');
         }
         return Ran(AccessToken._(after.accessToken));
       case TokenRefused(signInAgain: true):
         _dead = '$reply';
         _log('${file.path}: refresh refused: $reply; sign in again');
-        return Refused('sign in again: $reply');
+        return NothingRan('sign in again: $reply');
       case TokenRefused():
         _log('${file.path}: refresh failed: $reply');
         // Not yet expired: the token in hand still works.
         if (_now().isBefore(before.expiresAt)) {
           return Ran(AccessToken._(before.accessToken));
         }
-        return Refused('could not refresh: $reply');
+        return NothingRan('could not refresh: $reply');
     }
   }
 

@@ -169,6 +169,50 @@ void main() {
     ], reason: 'no temporary file is left beside it');
   });
 
+  // OpenAI rotated the token but its answer never arrived: the next refresh
+  // spends a dead token, hears so, and the sign-in stops there, no loop.
+  test('a lost refresh answer ends at one dead verdict, not a loop', () async {
+    final spent = <String>[];
+    final logged = <String>[];
+    final f = SignInFile(
+      file,
+      signedIn(),
+      refresh: (s) async {
+        spent.add(s.refreshToken);
+        return spent.length == 1
+            ? const TokenRefused(
+                'network',
+                'could not reach OpenAI',
+                signInAgain: false,
+              )
+            : const TokenRefused(
+                'refresh_token_reused',
+                'reused',
+                signInAgain: true,
+              );
+      },
+      now: () => now,
+      log: logged.add,
+    );
+    now = t0.add(const Duration(minutes: 56));
+    expect(tokenOf(await f.accessToken()), 'access-1');
+    expect(
+      (await f.accessToken() as NothingRan).why,
+      startsWith('sign in again'),
+    );
+    for (var i = 0; i < 3; i++) {
+      expect(
+        (await f.accessToken() as NothingRan).why,
+        startsWith('sign in again'),
+      );
+    }
+    expect(spent, ['refresh-1', 'refresh-1']);
+    expect(logged, [
+      contains(': refresh failed: '),
+      allOf(contains(': refresh refused: '), endsWith('sign in again')),
+    ]);
+  });
+
   test('a dead sign-in refuses, and is never refreshed again', () async {
     var refreshes = 0;
     final f = SignInFile(
@@ -185,8 +229,14 @@ void main() {
       now: () => now,
     );
     now = t0.add(const Duration(hours: 1));
-    expect((await f.accessToken() as Refused).why, startsWith('sign in again'));
-    expect((await f.accessToken() as Refused).why, startsWith('sign in again'));
+    expect(
+      (await f.accessToken() as NothingRan).why,
+      startsWith('sign in again'),
+    );
+    expect(
+      (await f.accessToken() as NothingRan).why,
+      startsWith('sign in again'),
+    );
     expect(refreshes, 1);
   });
 
@@ -201,7 +251,7 @@ void main() {
     now = t0.add(const Duration(minutes: 58));
     expect(tokenOf(await f.accessToken()), 'access-1');
     now = t0.add(const Duration(hours: 1));
-    expect(await f.accessToken(), isA<Refused>());
+    expect(await f.accessToken(), isA<NothingRan>());
   });
 
   test('refuses a sign-in without the plan scope, never calling', () async {
@@ -212,7 +262,7 @@ void main() {
       now: () => now,
     );
     expect(
-      (await f.accessToken() as Refused).why,
+      (await f.accessToken() as NothingRan).why,
       contains(ChatGptSignIn.planScope),
     );
   });

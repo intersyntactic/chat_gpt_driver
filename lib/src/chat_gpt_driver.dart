@@ -7,6 +7,7 @@ import 'package:is_effects/is_effects.dart';
 import 'package:is_unix_socket_user_check/is_unix_socket_user_check.dart';
 
 import 'responses_event.dart';
+import 'responses_request.dart';
 import 'sign_in_file.dart';
 
 /// The ChatGPT driver: a service on a Unix socket that asks the model
@@ -24,12 +25,12 @@ import 'sign_in_file.dart';
 /// call. It runs as its own user, so a sign-in's tokens are readable and
 /// writable by this process and no other.
 ///
-/// `request` is the Responses API `input`: a JSON array of the turns, sent
-/// as its exact bytes. The driver writes the rest of the body itself, and
-/// nothing else: `model`, `systemPrompt` as `instructions`, `store: false`
-/// and `stream: true` ([body]). A request that is not an array, such as a
-/// whole body, is refused, so the model called is only ever the one
-/// decided.
+/// `request` is a `{tools, turns}` request, from which the driver builds
+/// the Responses API `input` and `tools`, or a JSON array that is the
+/// `input` itself, sent as its exact bytes ([responsesBody]). The driver
+/// writes the rest of the body, so the model called is only ever the one
+/// decided. A reply that calls tools is a [ProposedToolCalls]: the driver
+/// runs nothing.
 final class ChatGptDriver {
   ChatGptDriver._(
     this._signIns,
@@ -126,7 +127,7 @@ final class ChatGptDriver {
         bytes.add(chunk);
       }
       if (tooLarge) {
-        _write(socket, const Finished(Refused('call too large')));
+        _write(socket, const Finished(NothingRan('call too large')));
         await socket.close();
         return;
       }
@@ -139,7 +140,7 @@ final class ChatGptDriver {
           jsonDecode(utf8.decode(bytes.takeBytes(), allowMalformed: true)),
         );
       } on FormatException catch (e) {
-        _write(socket, Finished(Refused('not a call: ${e.message}')));
+        _write(socket, Finished(NothingRan('not a call: ${e.message}')));
         await socket.close();
         return;
       }
@@ -164,33 +165,9 @@ final class ChatGptDriver {
         ),
       );
 
-  /// The whole body for one call, [input] spliced in as its own bytes.
-  /// [input] must already be a JSON array ([whyNotInput]).
-  static String body(ModelName model, String systemPrompt, String input) =>
-      '{"model":${jsonEncode(model.value)},'
-      '"instructions":${jsonEncode(systemPrompt)},'
-      '"store":false,"stream":true,'
-      '"input":$input}';
-
-  /// Why [request] cannot be the `input`, or null when it can: a JSON
-  /// array of objects, at least one.
-  static String? whyNotInput(String request) {
-    final Object? json;
-    try {
-      json = jsonDecode(request);
-    } on FormatException {
-      return 'request is not JSON';
-    }
-    return switch (json) {
-      List<Object?>(isEmpty: true) => 'request is an empty input',
-      final List<Object?> items when items.every((i) => i is Map) => null,
-      List<Object?>() => 'request holds an input item that is not an object',
-      Map<String, Object?>() =>
-        'request is a body; it must be only the input array',
-      _ => 'request is not an input array',
-    };
-  }
-
+  /// Everything up to the POST is [NothingRan]: no request has left. From
+  /// the POST on, a failure is [StoppedPartway], whatever the status: the
+  /// conversation has reached OpenAI, and the plan's allowance may be spent.
   Future<Outcome<ModelReply>> _ask(
     ModelSignInName signIn,
     ModelName model,
@@ -199,31 +176,42 @@ final class ChatGptDriver {
     Report report,
   ) async {
     final file = _signIns[signIn];
-    if (file == null) return Refused('no model sign-in $signIn');
-    if (whyNotInput(request) case final why?) return Refused(why);
+    if (file == null) return NothingRan('no model sign-in $signIn');
+    final String body;
+    try {
+      body = responsesBody(model, systemPrompt, request);
+    } on FormatException catch (e) {
+      return NothingRan(e.message);
+    }
     final AccessToken token;
     switch (await file.accessToken()) {
       case Ran(:final output):
         token = output;
-      case Refused(:final why):
-        return Refused('$signIn: $why');
+      case NothingRan(:final why) || StoppedPartway(:final why):
+        return NothingRan('$signIn: $why');
     }
     final http = HttpClient();
     try {
       return await _call(
         http,
         token,
-        body(model, systemPrompt, request),
+        body,
         report,
         '$signIn $model',
         // Looked up beside the call, not after it; it never throws.
         _contextWindow(http, signIn, model, token),
       ).timeout(_limit);
     } on TimeoutException {
-      return Refused('timed out after ${_limit.inSeconds}s');
+      return StoppedPartway(
+        why: 'timed out after ${_limit.inSeconds}s',
+        done: null,
+      );
     } on IOException catch (e) {
       _log('$signIn $model: $e');
-      return Refused('could not reach ChatGPT: ${e.runtimeType}');
+      return StoppedPartway(
+        why: 'lost ChatGPT mid-call: ${e.runtimeType}',
+        done: null,
+      );
     } finally {
       http.close(force: true);
     }
@@ -316,17 +304,18 @@ final class ChatGptDriver {
     if (response.statusCode != 200) {
       final text = await utf8.decoder.bind(response).join();
       _log('$call: HTTP ${response.statusCode}: ${_clip(text)}');
-      return Refused('chatgpt: HTTP ${response.statusCode}${_errorOf(text)}');
+      final why = 'chatgpt: HTTP ${response.statusCode}${_errorOf(text)}';
+      return StoppedPartway(why: why, done: null);
     }
-    final done = <int, String>{};
+    final done = <int, OutputItem>{};
     final arrived = StringBuffer();
     // With `store: false` a response can list no output: then the done
     // items are the reply, and failing those, what streamed.
-    String textOf(String? output) {
+    List<OutputItem> itemsOf(List<OutputItem>? output) {
       if (output != null) return output;
-      if (done.isEmpty) return '$arrived';
+      if (done.isEmpty) return [SaidItem('$arrived')];
       final keys = done.keys.toList()..sort();
-      return [for (final k in keys) done[k]].join();
+      return [for (final k in keys) done[k]!];
     }
 
     await for (final data in sseData(utf8.decoder.bind(response))) {
@@ -334,33 +323,85 @@ final class ChatGptDriver {
         case TextArriving(:final text):
           arrived.write(text);
           report(ReplyArriving(text));
-        case ItemDone(:final index, :final text):
-          done[index] = text;
-        case Completed(:final text, :final spent):
-          return Ran(
-            FinishedReply(
-              text: textOf(text),
-              usage: _usage(spent, await contextWindow),
-            ),
+        case ItemDone(:final index, :final item):
+          done[index] = item;
+        case Completed(:final output, :final spent):
+          return _reply(
+            itemsOf(output),
+            _usage(spent, await contextWindow),
+            call,
           );
-        case CutOff(:final text, :final spent, :final reason):
+        case CutOff(:final output, :final spent, :final reason):
           _log('$call: cut off: $reason');
+          // Calls in a cut-off reply may be partial, so only its text counts.
           return Ran(
             CutOffReply(
-              text: textOf(text),
+              text: _textOf(itemsOf(output)),
               usage: _usage(spent, await contextWindow),
             ),
           );
         case Stopped(:final why):
-          return Refused('chatgpt: $why');
+          return StoppedPartway(why: 'chatgpt: $why', done: null);
         case Unreadable():
           _log('$call: unreadable event: ${_clip('$data')}');
         case Other():
           break;
       }
     }
-    return const Refused(
-      'chatgpt: the stream ended before the reply was whole',
+    return const StoppedPartway(
+      why: 'chatgpt: the stream ended before the reply was whole',
+      done: null,
+    );
+  }
+
+  static String _textOf(List<OutputItem> items) => [
+    for (final item in items)
+      if (item case SaidItem(:final text)) text,
+  ].join();
+
+  /// A whole reply: [ProposedToolCalls] when the model called any tool,
+  /// carrying its reasoning items as they came, else [FinishedReply].
+  Outcome<ModelReply> _reply(
+    List<OutputItem> items,
+    ModelUsage? usage,
+    String call,
+  ) {
+    final text = _textOf(items);
+    final calls = <ToolCall>[];
+    for (final item in items) {
+      if (item case CallItem(:final callId, :final name, :final arguments)) {
+        final id = ToolCallId.parse(callId);
+        final input = ToolInput.parse(arguments);
+        if (id == null || input == null) {
+          _log('$call: unusable function_call: ${_clip('$callId $arguments')}');
+          return StoppedPartway(
+            why: id == null
+                ? 'chatgpt: a call id that is empty, too long or has '
+                      'control characters'
+                : 'chatgpt: call $callId sent arguments that are not a '
+                      'JSON object',
+            done: null,
+          );
+        }
+        calls.add(
+          ToolCall(id: id, name: CalledToolName.fromSent(name), input: input),
+        );
+      }
+    }
+    if (calls.isEmpty) return Ran(FinishedReply(text: text, usage: usage));
+    final reasoning = [
+      for (final item in items)
+        if (item case ReasoningItem(:final json)) json,
+    ];
+    return Ran(
+      ProposedToolCalls(
+        text: text,
+        calls: calls,
+        continuation: reasoning.isEmpty
+            ? null
+            : ProviderContinuation.parse(jsonEncode(reasoning)),
+        usage: usage,
+      ),
     );
   }
 

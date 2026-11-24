@@ -14,34 +14,65 @@ input. This driver writes every byte of the request body itself.
 
 One streamed `POST https://api.openai.com/v1/responses` per call, with
 `Authorization: Bearer <access token>` and `accept: text/event-stream`. The
-body is exactly:
+driver writes the whole body, so the model is only ever the one decided.
+`request` takes one of two shapes:
 
-```
-{"model":<model>,"instructions":<systemPrompt>,"store":false,"stream":true,"input":<request>}
-```
+- **`{tools, turns}`**, is_model_vocabulary's `ModelRequest`. The driver
+  builds the body from it with the same bytes for the same request every
+  time, since a replay is matched byte for byte:
 
-- **`request` is the `input` array**, the turns of the conversation as
-  Responses API items, and goes into the body as its own bytes: not
-  decoded and re-encoded, so a hash of what the airlock approved is a hash
-  of what was sent. A request that is not a JSON array of objects, such as
-  a whole body, is refused without calling, so the model is only ever the
-  one decided. Plain text is one turn:
-  `[{"role":"user","content":"…"}]`.
+  ```
+  {"model":…,"instructions":…,"store":false,"stream":true,
+   "include":["reasoning.encrypted_content"],
+   "tools":[{"type":"function","name":…,"description":…,"parameters":…,"strict":false}],
+   "input":[…]}
+  ```
+
+  `UserSaid` and `AgentSaid` are `user` and `assistant` messages.
+  `AgentCalledTools` is its continuation's reasoning items, as they came,
+  then its text (if any), then one `function_call` per call with the
+  `call_id`, the name as the model wrote it and the arguments text,
+  unchanged. `ToolAnswered` is a `function_call_output` whose text starts
+  with a line only the driver writes: `[tool ran]`, `[tool failed]` or
+  `[refused by the airlock: nothing ran]`. A `function_call_output` has
+  no error flag, and the first line is never the tool's own text, so a
+  fetched page that says "refused" can't pass as the airlock. `tools` is
+  left out when none are offered. `strict: false`, because strict mode
+  needs every property required, which the vocabulary doesn't enforce.
+- **A JSON array** is the `input` itself, the shape every request had
+  before tools, spliced into
+  `{"model":…,"instructions":…,"store":false,"stream":true,"input":<request>}`
+  as its own bytes, so a hash of what the airlock approved is a hash of
+  what was sent.
+
+Anything else (a whole body, an empty array, no turns, a continuation
+that isn't a list of items) is `NothingRan` without calling.
+
 - **The system prompt is `instructions`.** The plan rejects a system-role
   input item.
 - **Nothing else is sent.** Not `max_output_tokens` (the plan refuses it),
-  not a cache key, not tools. Measured in enspyrco/intersyntactic, "Reply
-  with OK." and "Hi" are 15 input tokens: nothing is added above the
-  system prompt.
+  not a cache key. Measured in enspyrco/intersyntactic, "Reply with OK."
+  and "Hi" are 15 input tokens: nothing is added above the system prompt.
 - **Streaming.** Each `response.output_text.delta` is reported as
-  `ReplyArriving`. On `response.completed` the reply is a `FinishedReply`:
-  the text of its output or, when that lists none (it may with
-  `store: false`), of the `response.output_item.done` items in order.
+  `ReplyArriving`. On `response.completed` the reply is built from its
+  output items or, when it lists none (it may with `store: false`), from
+  the `response.output_item.done` items in order. With any
+  `function_call` it is a `ProposedToolCalls`: each call's `call_id`
+  (never the `fc_` item id), its name kept as sent (a name no tool could
+  have is an `IllFormedName`, not a failure), and its arguments text as
+  it came. The reply's reasoning items ride along as its
+  `ProviderContinuation`, a JSON array of them as they arrived. The driver
+  runs nothing. Without calls it is a `FinishedReply`.
   `response.incomplete` (such as `max_output_tokens`) ran and spent
-  tokens, so it is `Ran` too, as a `CutOffReply` holding what came back.
-  `response.failed` and `error` are `Refused` with their reason, as is a
-  stream that ends before either: a dropped connection is never a short
-  reply.
+  tokens, so it is `Ran` too, as a `CutOffReply` holding the text that
+  came back; calls in it may be partial, so they are dropped.
+- **Did anything reach OpenAI?** Before the POST, every failure is
+  `NothingRan`. From the POST on it is `StoppedPartway`, since the
+  conversation has reached OpenAI and the allowance may be spent:
+  `response.failed`, `error`, a stream that ends early (never a short
+  reply), a timeout, a lost connection, any HTTP error status, and a call
+  whose id or arguments can't be carried (arguments that aren't a JSON
+  object).
 - **Usage.** Each reply carries a `ModelUsage` from the response's
   `usage`. OpenAI counts cached and cache-written tokens inside
   `input_tokens`; `ModelUsage.input` has them taken out, so `cacheRead`
@@ -53,7 +84,7 @@ body is exactly:
   not name the model, never a guess. The plan also lists a larger
   `max_context_window` behind an experimental setting; the smaller one is
   used.
-- **HTTP errors** are refused with their code, such as
+- **HTTP errors** carry their code, such as
   `chatgpt: HTTP 429: subscription_sharing_usage_limit_exceeded: …`.
 - **Ten minutes** at most per call.
 
@@ -167,14 +198,15 @@ line per message and closes:
 ```
 → {"signIn":"cam-chatgpt","model":"gpt-6.1-sol","systemPrompt":"…","request":"[{\"role\":\"user\",\"content\":\"Hi\"}]"}
 ← {"kind":"reported","progress":{"kind":"replyArriving","text":"…"}}   (any number)
-← {"kind":"finished","outcome":{"kind":"ran","output":"<the reply>"}}
-← {"kind":"finished","outcome":{"kind":"refused","why":"…"}}
+← {"kind":"finished","outcome":{"kind":"ran","output":<the ModelReply>}}
+← {"kind":"finished","outcome":{"kind":"nothingRan","why":"…"}}
+← {"kind":"finished","outcome":{"kind":"stoppedPartway","why":"…",…}}
 ```
 
 `{}` is a probe that never reaches the model:
 
 ```
-← {"kind":"finished","outcome":{"kind":"refused","why":"not a call: modelCall.signIn: not a string"}}
+← {"kind":"finished","outcome":{"kind":"nothingRan","why":"not a call: modelCall.signIn: not a string"}}
 ```
 
 The package holds no client for this wire: each caller, the airlock
