@@ -403,16 +403,22 @@ void main() {
 
     // A refused caller is hung up on, sometimes before its call is written:
     // a broken pipe and an empty answer both count as no answer.
-    test('closes on any other user, unanswered', () async {
+    test('closes on any other user, unanswered, and logs who', () async {
+      final logged = <String>[];
       final other = await startDriver(
         signIns,
         endpoint: endpoint,
         caller: UserId.parse(me.number + 1),
+        log: logged.add,
       );
       final (out, reported) = await callOverSocket(other, cam, gpt, '', hi);
       expect(out, isNull);
       expect(reported, isEmpty);
       expect(seen, isEmpty);
+      expect(logged, [
+        'refused a caller: not allowed: user $me is not one of '
+            '{${me.number + 1}}',
+      ]);
     });
 
     // The kernel's answer is faked, so each case runs on any platform.
@@ -428,17 +434,30 @@ void main() {
         overflowUid: () => 65534,
       ),
       'a kernel it cannot read': SocketUserReader(kernel: Kernel.other),
+      'a failed read whose error text has a line break': SocketUserReader(
+        kernel: Kernel.linux,
+        readOption: (_, _) =>
+            throw const SocketException('first line\nforged log line'),
+      ),
     };
     for (final MapEntry(key: what, value: reader) in unreadable.entries) {
-      test('closes on $what, unanswered', () async {
+      test('closes on $what, unanswered, and logs why', () async {
+        final logged = <String>[];
         final faked = await startDriver(
           signIns,
           endpoint: endpoint,
           socketUserReader: reader,
+          log: logged.add,
         );
         final (out, _) = await callOverSocket(faked, cam, gpt, '', hi);
         expect(out, isNull);
         expect(seen, isEmpty);
+        expect(logged, [
+          allOf(
+            startsWith('refused a caller: unread: '),
+            isNot(contains('\n')),
+          ),
+        ]);
       });
     }
 
