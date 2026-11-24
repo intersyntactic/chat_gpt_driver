@@ -434,6 +434,11 @@ void main() {
         overflowUid: () => 65534,
       ),
       'a kernel it cannot read': SocketUserReader(kernel: Kernel.other),
+      'a failed read whose error text has a line break': SocketUserReader(
+        kernel: Kernel.linux,
+        readOption: (_, _) =>
+            throw const SocketException('first line\nforged log line'),
+      ),
     };
     for (final MapEntry(key: what, value: reader) in unreadable.entries) {
       test('closes on $what, unanswered, and logs why', () async {
@@ -447,7 +452,12 @@ void main() {
         final (out, _) = await callOverSocket(faked, cam, gpt, '', hi);
         expect(out, isNull);
         expect(seen, isEmpty);
-        expect(logged, [startsWith('refused a caller: unread: ')]);
+        expect(logged, [
+          allOf(
+            startsWith('refused a caller: unread: '),
+            isNot(contains('\n')),
+          ),
+        ]);
       });
     }
 

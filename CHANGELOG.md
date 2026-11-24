@@ -2,7 +2,7 @@
 
 ## 0.2.4
 
-- is_unix_socket_user_check ^0.2.0. The driver asks `decide` for a verdict and, when it refuses a caller, logs one line saying why (`refused a caller: not allowed: …` or `refused a caller: unread: …`) before closing the socket. Who it admits is unchanged: only `Allowed` gets in.
+- is_unix_socket_user_check ^0.2.1. The driver asks `decide` for a verdict and, when it refuses a caller, logs one line saying why (`refused a caller: not allowed: …` or `refused a caller: unread: …`) before closing the socket. 0.2.1 keeps that line to one line even when the OS error text holds a line break. Who it admits is unchanged: only `Allowed` gets in.
 
 ## 0.2.3
 
