@@ -80,6 +80,10 @@ refresh and the old one dies**. So a sign-in is state, not a fixed secret:
 - **A dead sign-in** (`refresh_token_reused`, `invalid_grant` and the like)
   refuses every call until it is signed in again. A refresh that fails
   otherwise keeps using the token in hand until it expires.
+- **In the log**, each refresh leaves exactly one line, never a token:
+  `<file>: refreshed, good until <expires_at>`, or `<file>: refreshed but
+  not written (…); a restart now loses this sign-in`, or `<file>: refresh
+  refused: …; sign in again`, or `<file>: refresh failed: …`.
 - **No token is ever printed**: `toString()` is `a chatgpt-sign-in` or `an
   access token`, and logs carry status codes, never bodies with tokens.
 
