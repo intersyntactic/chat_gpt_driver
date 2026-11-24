@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.3
+
+- is_effects ^0.14.3, which moves `SignIn` into `is_sign_in_vocabulary` and re-exports it, and whose `decodeAddressPrefix` refuses keys other than `origin` and `pathPrefix`. The driver uses neither; no behaviour change.
+
 ## 0.2.2
 
 - is_effects ^0.14.2, which moves the web-address types into `is_web_address_vocabulary` and re-exports them. The driver uses none of them; no behaviour change.
