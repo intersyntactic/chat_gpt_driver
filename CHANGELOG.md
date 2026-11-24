@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.5
+
+- A successful token refresh logs one line once the new sign-in is written: `<sign-in file>: refreshed, good until <expires_at>`. It holds no token. Before, only a failed refresh logged anything, so the journal couldn't show that one had happened. If the write fails, the existing `refreshed but not written` line is logged instead, never both.
+
 ## 0.2.4
 
 - is_unix_socket_user_check ^0.2.1. The driver asks `decide` for a verdict and, when it refuses a caller, logs one line saying why (`refused a caller: not allowed: …` or `refused a caller: unread: …`) before closing the socket. 0.2.1 keeps that line to one line even when the OS error text holds a line break. Who it admits is unchanged: only `Allowed` gets in.

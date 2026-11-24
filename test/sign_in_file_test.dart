@@ -107,6 +107,51 @@ void main() {
     expect(spent, ['refresh-1', 'refresh-2']);
   });
 
+  test(
+    'logs a refresh once it is written, with its expiry and no token',
+    () async {
+      final logged = <String>[];
+      final f = SignInFile(
+        file,
+        signedIn(),
+        refresh: (_) async => tokens('2'),
+        now: () => now,
+        log: logged.add,
+      );
+      now = t0.add(const Duration(hours: 1));
+      await f.accessToken();
+      expect(logged, [
+        '${file.path}: refreshed, good until '
+            '${now.add(const Duration(hours: 1)).toIso8601String()}',
+      ]);
+      expect(
+        logged.single,
+        isNot(anyOf(contains('access-'), contains('refresh-'))),
+      );
+    },
+  );
+
+  test('a refresh it cannot write still serves, and says so instead', () async {
+    final logged = <String>[];
+    final f = SignInFile(
+      file,
+      signedIn(),
+      refresh: (_) async => tokens('2'),
+      now: () => now,
+      log: logged.add,
+    );
+    await Process.run('chmod', ['500', dir.path]);
+    addTearDown(() => Process.run('chmod', ['700', dir.path]));
+    now = t0.add(const Duration(hours: 1));
+    expect(tokenOf(await f.accessToken()), 'access-2');
+    expect(logged, [
+      allOf(
+        startsWith('${file.path}: refreshed but not written ('),
+        endsWith('a restart now loses this sign-in'),
+      ),
+    ]);
+  });
+
   test('writes the rotated sign-in before its token is used', () async {
     final f = SignInFile(
       file,

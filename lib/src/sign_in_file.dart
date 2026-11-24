@@ -131,6 +131,10 @@ final class SignInFile {
         _signIn = after;
         try {
           await _write(after);
+          _log(
+            '${file.path}: refreshed, good until '
+            '${after.expiresAt.toIso8601String()}',
+          );
         } on FileSystemException catch (e) {
           _log(
             '${file.path}: refreshed but not written (${e.osError ?? e.message}); '
