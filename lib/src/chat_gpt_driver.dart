@@ -110,7 +110,9 @@ final class ChatGptDriver {
 
   Future<void> _serve(Socket socket) async {
     try {
-      if (!_socketUserCheck.allows(socket)) {
+      final verdict = _socketUserCheck.decide(socket);
+      if (verdict is! Allowed) {
+        _log('refused a caller: $verdict');
         socket.destroy();
         return;
       }
