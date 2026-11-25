@@ -95,11 +95,16 @@ sealed class ResponsesEvent {
         {'cache_write_tokens': final int n} => n,
         _ => null,
       };
+      final reasoning = switch (usage) {
+        {'output_tokens_details': {'reasoning_tokens': final int n}} => n,
+        _ => null,
+      };
       return (
         input: input - cached - (written ?? 0),
         cached: cached,
         output: output,
         cacheWritten: written,
+        reasoning: reasoning,
       );
     }
     return null;
@@ -189,9 +194,16 @@ final class OtherItem extends OutputItem {
 }
 
 /// What one call spent, each count separate: [input] holds neither
-/// [cached] nor [cacheWritten]. [cacheWritten] is null when OpenAI did not
-/// say.
-typedef Spent = ({int input, int cached, int output, int? cacheWritten});
+/// [cached] nor [cacheWritten]. [reasoning] is the part of [output] the
+/// model spent reasoning. [cacheWritten] and [reasoning] are null when
+/// OpenAI did not say.
+typedef Spent = ({
+  int input,
+  int cached,
+  int output,
+  int? cacheWritten,
+  int? reasoning,
+});
 
 /// The reply is whole. [output] is its items, or null when the response
 /// listed none.

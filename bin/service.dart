@@ -15,6 +15,10 @@
 /// then it listens and refuses every call, so a rehearsal can prove the
 /// binary, sandbox and socket without ever holding a live sign-in.
 ///
+/// `CHAT_GPT_DRIVER_REASONING_EFFORT` is how hard the model reasons on a
+/// `{tools, turns}` call: `low`, `medium` (when unset), `high`, or `off` to
+/// send none.
+///
 /// Exits 78 when it cannot start as configured, and closes cleanly on
 /// SIGTERM or SIGINT.
 library;
@@ -61,6 +65,18 @@ Future<void> main() async {
     '1' => true,
     final other => _fail('CHAT_GPT_DRIVER_ALLOW_NO_SIGN_INS is $other, not 1'),
   };
+  // wire-ok: an environment variable, read once here.
+  final reasoningEffort = switch (env['CHAT_GPT_DRIVER_REASONING_EFFORT']) {
+    null => ReasoningEffort.medium,
+    'off' => null,
+    final name =>
+      ReasoningEffort.parse(name) ??
+          _fail(
+            'CHAT_GPT_DRIVER_REASONING_EFFORT is $name, not '
+            '${[for (final e in ReasoningEffort.values) e.name].join(', ')} '
+            'or off',
+          ),
+  };
   if (signIns.isEmpty && !allowNoSignIns) {
     _fail('no model sign-ins in $state');
   }
@@ -75,6 +91,7 @@ Future<void> main() async {
       signIns,
       caller: uid,
       socket: File(socket),
+      reasoningEffort: reasoningEffort,
       log: stdout.writeln,
     );
   } on Object catch (e) {
@@ -82,7 +99,8 @@ Future<void> main() async {
   }
   stdout.writeln(
     'listening on $socket for $caller, '
-    'model sign-ins: ${signIns.keys.join(' ')}',
+    'model sign-ins: ${signIns.keys.join(' ')}, '
+    'reasoning effort: ${reasoningEffort?.name ?? 'off'}',
   );
   final stop = Completer<void>();
   for (final signal in [ProcessSignal.sigterm, ProcessSignal.sigint]) {

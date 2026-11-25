@@ -77,6 +77,7 @@ Future<File> startDriver(
   UserId? caller,
   SocketUserReader? socketUserReader,
   void Function(String line)? log,
+  ReasoningEffort? reasoningEffort,
 }) async {
   final socket = await freshSocket();
   final driver = await ChatGptDriver.start(
@@ -84,6 +85,7 @@ Future<File> startDriver(
     caller: caller ?? me,
     socket: socket,
     endpoint: endpoint,
+    reasoningEffort: reasoningEffort,
     log: log,
     socketUserReader: socketUserReader,
   );

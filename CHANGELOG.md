@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.2
+
+- A `{tools, turns}` call now asks for a reasoning effort, `"reasoning":{"effort":…}` after `include`. Without one, the plan's model may not reason at all, so a reply that proposes calls had no reasoning items to carry back. The service reads `CHAT_GPT_DRIVER_REASONING_EFFORT`: `low`, `medium` (when unset), `high`, or `off` to send none. Its start line now ends `reasoning effort: <effort>`. A JSON-array request is sent as its own bytes, as before, with no effort.
+- Each whole call logs how much of its output was reasoning (`<sign-in> <model>: reasoned N of M output tokens`, or `reasoning not reported`). `ModelUsage` has no field for it.
+
 ## 0.3.1
 
 - Relocks is_web_address_vocabulary to 0.1.2 (it comes in through is_effects), so this build locks the same versions of the shared packages as every other build that ships with agent_loop 0.9: is_effects 0.15.0, is_model_vocabulary 0.2.0, and the newest of every other is_* package. In 0.1.2, `WebPath.parse('')` returns `WebPath.root` instead of null. The driver never calls `WebPath`, so its behaviour doesn't change.

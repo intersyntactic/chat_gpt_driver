@@ -36,6 +36,7 @@ final class ChatGptDriver {
     this._signIns,
     this._endpoint,
     this._limit,
+    this._reasoningEffort,
     this._log,
     this._socketUserCheck,
     this._socket,
@@ -44,7 +45,8 @@ final class ChatGptDriver {
 
   /// Listens on [socket] for the user [caller] alone, asking the model as
   /// the sign-ins in [signIns] at [endpoint], the Responses API by default.
-  /// [limit] is how long one call may run; [socketUserReader] reads each
+  /// [limit] is how long one call may run; [reasoningEffort], when given,
+  /// is asked of every `{tools, turns}` call; [socketUserReader] reads each
   /// caller's user from the kernel, the running kernel's by default. A
   /// socket file nothing listens on is replaced.
   static Future<ChatGptDriver> start(
@@ -53,6 +55,7 @@ final class ChatGptDriver {
     required File socket,
     Uri? endpoint,
     Duration limit = const Duration(minutes: 10),
+    ReasoningEffort? reasoningEffort,
     void Function(String line)? log,
     SocketUserReader? socketUserReader,
   }) async {
@@ -60,6 +63,7 @@ final class ChatGptDriver {
       Map.unmodifiable(signIns),
       endpoint ?? Uri.parse('https://api.openai.com/v1/responses'),
       limit,
+      reasoningEffort,
       log ?? _silent,
       SocketUserCheck.only(caller, reader: socketUserReader),
       socket,
@@ -75,8 +79,12 @@ final class ChatGptDriver {
   /// How long one call may run before it is abandoned.
   final Duration _limit;
 
-  /// Where a failed call's status and unreadable events go: for whoever
-  /// runs the driver, not the record. Never a token.
+  /// How hard the model reasons on a `{tools, turns}` call; null sends none.
+  final ReasoningEffort? _reasoningEffort;
+
+  /// Where a failed call's status, unreadable events and each whole call's
+  /// reasoning tokens go: for whoever runs the driver, not the record.
+  /// Never a token.
   final void Function(String line) _log;
 
   final SocketUserCheck _socketUserCheck;
@@ -179,7 +187,12 @@ final class ChatGptDriver {
     if (file == null) return NothingRan('no model sign-in $signIn');
     final String body;
     try {
-      body = responsesBody(model, systemPrompt, request);
+      body = responsesBody(
+        model,
+        systemPrompt,
+        request,
+        effort: _reasoningEffort,
+      );
     } on FormatException catch (e) {
       return NothingRan(e.message);
     }
@@ -220,7 +233,13 @@ final class ChatGptDriver {
   static ModelUsage? _usage(Spent? spent, int? contextWindow) =>
       switch (spent) {
         null => null,
-        (:final input, :final cached, :final output, :final cacheWritten) =>
+        (
+          :final input,
+          :final cached,
+          :final output,
+          :final cacheWritten,
+          reasoning: _,
+        ) =>
           ModelUsage(
             input: input,
             cacheRead: cached,
@@ -326,6 +345,7 @@ final class ChatGptDriver {
         case ItemDone(:final index, :final item):
           done[index] = item;
         case Completed(:final output, :final spent):
+          _logReasoning(call, spent);
           return _reply(
             itemsOf(output),
             _usage(spent, await contextWindow),
@@ -333,6 +353,7 @@ final class ChatGptDriver {
           );
         case CutOff(:final output, :final spent, :final reason):
           _log('$call: cut off: $reason');
+          _logReasoning(call, spent);
           // Calls in a cut-off reply may be partial, so only its text counts.
           return Ran(
             CutOffReply(
@@ -353,6 +374,16 @@ final class ChatGptDriver {
       done: null,
     );
   }
+
+  /// How much of a whole call's output was reasoning, which [ModelUsage]
+  /// has no place for, so whether the model reasoned can be read later.
+  void _logReasoning(String call, Spent? spent) => _log(switch (spent) {
+    null => '$call: no usage reported',
+    (:final output, reasoning: null, input: _, cached: _, cacheWritten: _) =>
+      '$call: $output output tokens, reasoning not reported',
+    (:final output, :final reasoning?, input: _, cached: _, cacheWritten: _) =>
+      '$call: reasoned $reasoning of $output output tokens',
+  });
 
   static String _textOf(List<OutputItem> items) => [
     for (final item in items)

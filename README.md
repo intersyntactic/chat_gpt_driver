@@ -24,6 +24,7 @@ driver writes the whole body, so the model is only ever the one decided.
   ```
   {"model":…,"instructions":…,"store":false,"stream":true,
    "include":["reasoning.encrypted_content"],
+   "reasoning":{"effort":…},
    "tools":[{"type":"function","name":…,"description":…,"parameters":…,"strict":false}],
    "input":[…]}
   ```
@@ -181,8 +182,13 @@ process, not across processes.
 At start it loads the sign-ins and prints one line:
 
 ```
-listening on <socket> for <caller>, model sign-ins: <names>
+listening on <socket> for <caller>, model sign-ins: <names>, reasoning effort: <effort>
 ```
+
+`CHAT_GPT_DRIVER_REASONING_EFFORT` sets how hard the model reasons on a
+`{tools, turns}` call: `low`, `medium` (when unset), `high`, or `off` to
+send no `reasoning` field. With none sent, the plan's model may not reason
+at all. Each whole call logs how much of its output was reasoning.
 
 Any configuration it cannot start with exits 78, including a state
 directory with no sign-ins. `CHAT_GPT_DRIVER_ALLOW_NO_SIGN_INS=1` lets it

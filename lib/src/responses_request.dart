@@ -23,8 +23,15 @@ import 'package:is_model_vocabulary/is_model_vocabulary.dart'
 /// - a JSON array, the Responses `input` itself, spliced in as its own
 ///   bytes, as every request was before tools.
 ///
-/// A request that is neither is a [FormatException] saying why.
-String responsesBody(ModelName model, String systemPrompt, String request) {
+/// A request that is neither is a [FormatException] saying why. [effort],
+/// when given, goes in a `{tools, turns}` body only: an input array's body
+/// stays as the bytes the airlock approved.
+String responsesBody(
+  ModelName model,
+  String systemPrompt,
+  String request, {
+  ReasoningEffort? effort,
+}) {
   final Object? json;
   try {
     json = jsonDecode(request);
@@ -47,6 +54,7 @@ String responsesBody(ModelName model, String systemPrompt, String request) {
       model,
       systemPrompt,
       ModelRequest.decode(request),
+      effort,
     ),
     _ => throw const FormatException(
       'request is neither {tools, turns} nor an input array',
@@ -54,7 +62,23 @@ String responsesBody(ModelName model, String systemPrompt, String request) {
   };
 }
 
-String _fromTurns(ModelName model, String systemPrompt, ModelRequest request) {
+/// How hard the model reasons before it answers, sent as
+/// `reasoning.effort`. With none sent, the model may not reason at all.
+enum ReasoningEffort {
+  low,
+  medium,
+  high;
+
+  /// The effort named [name], or null when none is.
+  static ReasoningEffort? parse(String name) => values.asNameMap()[name];
+}
+
+String _fromTurns(
+  ModelName model,
+  String systemPrompt,
+  ModelRequest request,
+  ReasoningEffort? effort,
+) {
   if (request.turns.isEmpty) {
     throw const FormatException('request has no turns');
   }
@@ -66,6 +90,7 @@ String _fromTurns(ModelName model, String systemPrompt, ModelRequest request) {
     // Without this, store:false gives reasoning items with nothing in
     // them to send back, and the model loses its reasoning at every call.
     'include': ['reasoning.encrypted_content'],
+    if (effort != null) 'reasoning': {'effort': effort.name},
     if (request.tools.isNotEmpty)
       'tools': [
         for (final tool in request.tools)
