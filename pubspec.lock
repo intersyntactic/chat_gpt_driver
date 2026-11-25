@@ -197,10 +197,10 @@ packages:
     dependency: transitive
     description:
       name: is_web_address_vocabulary
-      sha256: "232241a06a2871213e110f52f01c8c68b6c98fdcdf00fcfb491c8e24d10d8dac"
+      sha256: a0b58425fc7eaf98e740cdfac614201fa426594fafdf198903e961f0ee4ed6dd
       url: "https://pub.dev"
     source: hosted
-    version: "0.1.1"
+    version: "0.1.2"
   lints:
     dependency: "direct dev"
     description:
