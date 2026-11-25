@@ -241,6 +241,32 @@ void main() {
     expect(reply.usage!.context, 1200);
   });
 
+  test('logs how much of each whole call was reasoning', () async {
+    final logged = <String>[];
+    final logging = await startDriver(
+      signIns,
+      endpoint: endpoint,
+      log: logged.add,
+    );
+    const hi = '[{"role":"user","content":"Hi"}]';
+    answer = (
+      200,
+      sse([
+        completed('OK', {
+          ...usage,
+          'output_tokens_details': {'reasoning_tokens': 5},
+        }),
+      ]),
+    );
+    await callOverSocket(logging, cam, gpt, '', hi);
+    answer = (200, sse([completed('OK', usage)]));
+    await callOverSocket(logging, cam, gpt, '', hi);
+    expect(logged, [
+      'cam-chatgpt gpt-6.1-sol: reasoned 5 of 7 output tokens',
+      'cam-chatgpt gpt-6.1-sol: 7 output tokens, reasoning not reported',
+    ]);
+  });
+
   test(
     'a cache write, when OpenAI counts one, is taken out of input too',
     () async {
@@ -657,6 +683,30 @@ void main() {
         expect(seen, isEmpty);
       },
     );
+
+    test('asks for the effort it was started with, after include, the same '
+        'bytes each time; an input array is sent as it came', () async {
+      final reasoned = await startDriver(
+        signIns,
+        endpoint: endpoint,
+        reasoningEffort: ReasoningEffort.medium,
+      );
+      answer = (200, sse([completed('OK', usage)]));
+      final request = requestOf([const UserSaid('Hi')]);
+      const array = '[{"role":"user","content":"Hi"}]';
+      for (final r in [request, request, array]) {
+        await callOverSocket(reasoned, cam, gpt, 'You are Cam.', r);
+      }
+      expect(seen[0].body, seen[1].body);
+      expect(
+        utf8.decode(seen[0].body),
+        contains(
+          '"include":["reasoning.encrypted_content"],'
+          '"reasoning":{"effort":"medium"},"tools":',
+        ),
+      );
+      expect(bodyOf(seen[2]), isNot(contains('reasoning')));
+    });
   });
 
   group('the socket', () {
