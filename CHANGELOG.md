@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+
+- Relocks is_web_address_vocabulary to 0.1.2 (it comes in through is_effects), so this build locks the same versions of the shared packages as every other build that ships with agent_loop 0.9: is_effects 0.15.0, is_model_vocabulary 0.2.0, and the newest of every other is_* package. In 0.1.2, `WebPath.parse('')` returns `WebPath.root` instead of null. The driver never calls `WebPath`, so its behaviour doesn't change.
+
 ## 0.3.0
 
 - **Breaking:** is_effects ^0.15.0. `Refused` is gone, and every failure says whether anything reached OpenAI: `NothingRan` before the POST (a bad call, an unknown sign-in, a bad request, a sign-in that can't give a token), `StoppedPartway` (with `done` null) from the POST on (any HTTP error status, a failed or truncated stream, a timeout, a lost connection). A caller must move to is_effects 0.15.0 before this driver is deployed: an older one can't read `nothingRan` or `stoppedPartway`. The `{}` probe now answers `{"kind":"nothingRan",…}`.
