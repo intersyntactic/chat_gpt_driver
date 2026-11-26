@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.3
+
+- Moves to is_effects ^0.17.0. It no longer re-exports the model types, so the driver imports them from is_model_vocabulary (already a dependency, still 0.2.0). No codec changed between is_effects 0.15 and 0.17: this driver and an airlock on either version read each other byte for byte, so it deploys in any order. The driver's behaviour doesn't change.
+
 ## 0.3.2
 
 - A `{tools, turns}` call now asks for a reasoning effort, `"reasoning":{"effort":…}` after `include`. Without one, the plan's model may not reason at all, so a reply that proposes calls had no reasoning items to carry back. The service reads `CHAT_GPT_DRIVER_REASONING_EFFORT`: `low`, `medium` (when unset), `high`, or `off` to send none. Its start line now ends `reasoning effort: <effort>`. A JSON-array request is sent as its own bytes, as before, with no effort.
