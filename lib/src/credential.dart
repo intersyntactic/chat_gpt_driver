@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:checked_json/checked_json.dart';
+
 /// A model sign-in's secret. Each kind is a way a ChatGPT plan can be signed
 /// in, so a new kind is a new case here, never a change to the caller.
 sealed class Credential {
@@ -10,9 +12,12 @@ sealed class Credential {
   static Credential parse(String raw) {
     final Object? json;
     try {
-      json = jsonDecode(raw);
-    } on FormatException {
-      throw const FormatException('credential is not JSON');
+      json = decodeJsonRefusingDuplicateKeysAndUnsafeIntegers(raw);
+    } on FormatException catch (e) {
+      // The message names at most a key, never a value.
+      throw FormatException(
+        'credential is not JSON the driver reads: ${e.message}',
+      );
     }
     return switch (json) {
       {'kind': 'chatgpt-sign-in'} => ChatGptSignIn._fromJson(json),
