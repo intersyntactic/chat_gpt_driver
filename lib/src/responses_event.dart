@@ -1,4 +1,4 @@
-import 'dart:convert';
+import 'package:checked_json/checked_json.dart';
 
 /// The `data:` payloads of a server-sent event stream, decoded. A chunk
 /// boundary can fall anywhere, mid-line included; `event:` lines are
@@ -16,7 +16,7 @@ Stream<Object?> sseData(Stream<String> chunks) async* {
       final payload = line.substring(5).trim();
       if (payload.isEmpty) continue;
       try {
-        yield jsonDecode(payload);
+        yield decodeJsonRefusingDuplicateKeysAndUnsafeIntegers(payload);
       } on FormatException {
         yield const _NotJson();
       }
@@ -59,7 +59,7 @@ sealed class ResponsesEvent {
     {'type': 'response.failed'} => const Stopped('failed'),
     {'type': 'error', 'error': final Object? error} => Stopped(_error(error)),
     {'type': 'error'} => Stopped(_error(json)),
-    Map<String, Object?>() => const Other(),
+    _ when JsonObject.parse(json) != null => const Other(),
     _ => const Unreadable(),
   };
 
@@ -159,9 +159,10 @@ sealed class OutputItem {
       'arguments': final String arguments,
     } =>
       CallItem(callId, name, arguments),
-    {'type': 'reasoning'} && final Map<String, Object?> json => ReasoningItem(
-      json,
-    ),
+    {'type': 'reasoning'} => switch (JsonObject.parse(item)) {
+      final json? => ReasoningItem(json),
+      null => const OtherItem(),
+    },
     _ => const OtherItem(),
   };
 }
@@ -185,7 +186,7 @@ final class CallItem extends OutputItem {
 /// as it came, ahead of the calls it led to.
 final class ReasoningItem extends OutputItem {
   const ReasoningItem(this.json);
-  final Map<String, Object?> json;
+  final JsonObject json;
 }
 
 /// Anything else, which carries nothing the reply needs.

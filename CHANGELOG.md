@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.4
+
+- Moves to checked_json ^0.3.0, is_model_vocabulary ^0.3.0 and is_effects ^0.18.0. checked_json is now a dependency, not only a dev one: every JSON text the driver reads from outside (the airlock's call, the request and its continuation, each streamed event, the models list, an error body, a token reply and a credential file) goes through `decodeJsonRefusingDuplicateKeysAndUnsafeIntegers`. An object that names a key twice, or an integer past 2^53 - 1, is refused where `jsonDecode` kept the last value without a word. A refused call or request says why (`not a call: duplicate key "signIn"`), and a refused event reads as unreadable. The airlock encodes its calls from typed values, so they never repeat a key; a request is refused only if a turn carries an integer that large, such as one a model wrote into a tool's input, which is_model_vocabulary 0.3.0 now refuses at the airlock too. No codec changed, so this deploys in any order.
+
 ## 0.3.3
 
 - Moves to is_effects ^0.17.0. It no longer re-exports the model types, so the driver imports them from is_model_vocabulary (already a dependency, still 0.2.0). No codec changed between is_effects 0.15 and 0.17: this driver and an airlock on either version read each other byte for byte, so it deploys in any order. The driver's behaviour doesn't change.

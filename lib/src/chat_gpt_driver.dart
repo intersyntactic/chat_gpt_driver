@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:checked_json/checked_json.dart';
 import 'package:is_effects/is_effects.dart';
 import 'package:is_model_vocabulary/is_model_vocabulary.dart';
 import 'package:is_unix_socket_user_check/is_unix_socket_user_check.dart';
@@ -146,7 +147,9 @@ final class ChatGptDriver {
       final String request;
       try {
         (signIn, model, systemPrompt, request) = decodeModelCall(
-          jsonDecode(utf8.decode(bytes.takeBytes(), allowMalformed: true)),
+          decodeJsonRefusingDuplicateKeysAndUnsafeIntegers(
+            utf8.decode(bytes.takeBytes(), allowMalformed: true),
+          ),
         );
       } on FormatException catch (e) {
         _write(socket, Finished(NothingRan('not a call: ${e.message}')));
@@ -278,7 +281,9 @@ final class ChatGptDriver {
         _log('$signIn: models: HTTP ${response.statusCode}');
         return null;
       }
-      final windows = switch (jsonDecode(text)) {
+      final windows = switch (decodeJsonRefusingDuplicateKeysAndUnsafeIntegers(
+        text,
+      )) {
         {'models': final List<Object?> models} => {
           for (final m in models)
             if (m case {
@@ -295,8 +300,8 @@ final class ChatGptDriver {
       _log('$signIn: models: ${e.runtimeType}');
     } on TimeoutException {
       _log('$signIn: models: no answer in ${_modelsLimit.inSeconds}s');
-    } on FormatException {
-      _log('$signIn: models: not JSON');
+    } on FormatException catch (e) {
+      _log('$signIn: models: not JSON the driver reads: ${e.message}');
     }
     return null;
   }
@@ -442,7 +447,7 @@ final class ChatGptDriver {
   static String _errorOf(String text) {
     final Object? json;
     try {
-      json = jsonDecode(text);
+      json = decodeJsonRefusingDuplicateKeysAndUnsafeIntegers(text);
     } on FormatException {
       return '';
     }

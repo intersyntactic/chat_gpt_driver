@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:checked_json/checked_json.dart';
 import 'package:is_effects/is_effects.dart';
 import 'package:is_model_vocabulary/is_model_vocabulary.dart';
 
@@ -24,9 +25,9 @@ String responsesBody(
 }) {
   final Object? json;
   try {
-    json = jsonDecode(request);
-  } on FormatException {
-    throw const FormatException('request is not JSON');
+    json = decodeJsonRefusingDuplicateKeysAndUnsafeIntegers(request);
+  } on FormatException catch (e) {
+    throw FormatException('request is not JSON the driver reads: ${e.message}');
   }
   return switch (json) {
     List<Object?>(isEmpty: true) => throw const FormatException(
@@ -40,7 +41,7 @@ String responsesBody(
     List<Object?>() => throw const FormatException(
       'request holds an input item that is not an object',
     ),
-    Map<String, Object?>() => _fromTurns(
+    _ when JsonObject.parse(json) != null => _fromTurns(
       model,
       systemPrompt,
       ModelRequest.decode(request),
@@ -129,7 +130,7 @@ Map<String, Object?> _message(String role, String text) => {
 /// they led to.
 List<Object?>? _continued(String? text) => switch (text) {
   null => null,
-  _ => switch (jsonDecode(text)) {
+  _ => switch (decodeJsonRefusingDuplicateKeysAndUnsafeIntegers(text)) {
     final List<Object?> items when items.every((i) => i is Map) => items,
     _ => throw const FormatException(
       'a continuation that is not a list of items',

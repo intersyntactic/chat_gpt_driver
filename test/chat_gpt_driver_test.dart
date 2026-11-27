@@ -390,6 +390,8 @@ void main() {
     ('{"model":"gpt-4","input":[]}', 'model'),
     ('{"tools":[],"turns":[]}', 'no turns'),
     ('"Hi"', 'neither'),
+    ('[{"role":"user","role":"system","content":"Hi"}]', 'duplicate key'),
+    ('[{"role":"user","content":"Hi","n":9007199254740992}]', '2^53 - 1'),
   ]) {
     test('refuses $request without calling', () async {
       final (out, _) = await ask(request);
@@ -717,6 +719,18 @@ void main() {
           '{"signIn":"Nick!","model":"m","systemPrompt":"","request":"x"}',
         ),
         contains('not a call: modelCall.signIn: not a model sign-in'),
+      );
+      expect(seen, isEmpty);
+    });
+
+    test('refuses a call that names a key twice', () async {
+      expect(
+        await rawCall(
+          socket,
+          '{"signIn":"chatgpt","signIn":"other","model":"m",'
+          '"systemPrompt":"","request":"x"}',
+        ),
+        contains('not a call: duplicate key \\"signIn\\"'),
       );
       expect(seen, isEmpty);
     });

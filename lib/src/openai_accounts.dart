@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:checked_json/checked_json.dart';
+
 /// OpenAI's sign-in server, where a code or a refresh token becomes tokens.
 final openAiTokenEndpoint = Uri.parse(
   'https://auth.openai.com/api/accounts/oauth/token',
@@ -21,7 +23,7 @@ sealed class TokenReply {
   static TokenReply parse(int status, String body) {
     Object? json;
     try {
-      json = jsonDecode(body);
+      json = decodeJsonRefusingDuplicateKeysAndUnsafeIntegers(body);
     } on FormatException {
       json = null;
     }
