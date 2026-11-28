@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:is_chat_gpt_driver/is_chat_gpt_driver.dart';
-import 'package:is_effects/is_effects.dart';
+import 'package:is_outcome_vocabulary/is_outcome_vocabulary.dart';
 import 'package:is_model_vocabulary/is_model_vocabulary.dart';
 import 'package:is_unix_socket_user_check/is_unix_socket_user_check.dart';
 import 'package:test/test.dart';
@@ -24,14 +24,14 @@ Future<File> freshSocket() async {
 /// in, then one JSON line per message until the finished one. A caller the
 /// driver hangs up on, which may happen before the call is even written,
 /// gets null.
-Future<(Outcome<ModelReply>?, List<Progress>)> callOverSocket(
+Future<(Outcome<ModelReply>?, List<ReplyArriving>)> callOverSocket(
   File socket,
   ModelSignInName signIn,
   ModelName model,
   String systemPrompt,
   String request,
 ) async {
-  final reported = <Progress>[];
+  final reported = <ReplyArriving>[];
   try {
     final s = await Socket.connect(
       InternetAddress(socket.path, type: InternetAddressType.unix),
@@ -39,13 +39,24 @@ Future<(Outcome<ModelReply>?, List<Progress>)> callOverSocket(
     );
     s.add(
       utf8.encode(
-        jsonEncode(encodeModelCall(signIn, model, systemPrompt, request)),
+        jsonEncode(
+          ModelCall(
+            signIn: signIn,
+            model: model,
+            systemPrompt: systemPrompt,
+            request: request,
+          ).toJson(),
+        ),
       ),
     );
     await s.close();
     await for (final line
         in utf8.decoder.bind(s).transform(const LineSplitter())) {
-      switch (decodeProgramMessage(jsonDecode(line), decodeModelReply)) {
+      switch (decodeProgramMessage<ReplyArriving, ModelReply>(
+        jsonDecode(line),
+        (json, _) => ReplyArriving.fromJson(json),
+        (json, _) => ModelReply.fromJson(json),
+      )) {
         case Reported(:final progress):
           reported.add(progress);
         case Finished(:final outcome):

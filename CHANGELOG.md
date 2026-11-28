@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.6
+
+- Drops is_effects, which is broken up, for is_outcome_vocabulary ^0.1.0 and is_model_vocabulary ^0.5.0. The call is read with `ModelCall.fromJson`, and pieces of the reply are written with `ReplyArriving.toJson`. Every message the driver writes has the same bytes as before.
+- A call with a key besides `signIn`, `model`, `systemPrompt` and `request` is now refused, where it used to be read with the extra key ignored. The airlock writes exactly those four, so nothing it sends changes meaning.
+- A refused call's reason is worded by is_model_vocabulary now: the `{}` probe answers `not a call: \`signIn\` is not a string`, where it answered `not a call: modelCall.signIn: not a string`.
+- A `{tools, turns}` request with named tools (is_model_vocabulary 0.5's `namedTools` and `NamedToolsDefined`) is refused before anything is sent: `this driver does not send named tools yet`. Dropping them would hide tools from the model without a word. Under 0.3.5 such a request failed to read at all, so nothing that worked stops working.
+
 ## 0.3.5
 
 - Moves to checked_json ^0.4.0, is_model_vocabulary ^0.4.0 and is_effects ^0.19.0. In checked_json 0.4.0 a `JsonObject` is a read-only class rather than an extension type, and nothing inside one can change. The driver makes one only through `JsonObject.parse`, and never casts a map to one or writes into a decoded value, so no code changed. No codec changed, so this deploys in any order.

@@ -24,7 +24,7 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:is_chat_gpt_driver/is_chat_gpt_driver.dart';
-import 'package:is_effects/is_effects.dart';
+import 'package:is_model_vocabulary/is_model_vocabulary.dart';
 
 final _authorize = Uri.parse('https://auth.openai.com/api/accounts/authorize');
 const _scopes =

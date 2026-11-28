@@ -212,7 +212,7 @@ line per message and closes:
 `{}` is a probe that never reaches the model:
 
 ```
-← {"kind":"finished","outcome":{"kind":"nothingRan","why":"not a call: modelCall.signIn: not a string"}}
+← {"kind":"finished","outcome":{"kind":"nothingRan","why":"not a call: `signIn` is not a string"}}
 ```
 
 The package holds no client for this wire: each caller, the airlock

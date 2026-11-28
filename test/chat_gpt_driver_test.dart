@@ -4,7 +4,7 @@ import 'dart:typed_data';
 
 import 'package:checked_json/checked_json.dart';
 import 'package:is_chat_gpt_driver/is_chat_gpt_driver.dart';
-import 'package:is_effects/is_effects.dart';
+import 'package:is_outcome_vocabulary/is_outcome_vocabulary.dart';
 import 'package:is_model_vocabulary/is_model_vocabulary.dart';
 import 'package:is_unix_socket_user_check/is_unix_socket_user_check.dart';
 import 'package:test/test.dart';
@@ -116,10 +116,7 @@ void main() {
       systemPrompt,
       request,
     );
-    return (
-      out ?? fail('hung up on'),
-      [for (final p in reported) (p as ReplyArriving).text],
-    );
+    return (out ?? fail('hung up on'), [for (final p in reported) p.text]);
   }
 
   test('sends the approved input as its own bytes, and nothing else', () async {
@@ -169,6 +166,34 @@ void main() {
     final (out, pieces) = await ask('[{"role":"user","content":"Hi"}]');
     expect((out as Ran<ModelReply>).output.text, 'Hello');
     expect(pieces, ['Hel', 'lo']);
+  });
+
+  test('writes each piece as the airlock reads it, byte for byte', () async {
+    answer = (
+      200,
+      sse([
+        {'type': 'response.output_text.delta', 'delta': 'Hi'},
+        {
+          'type': 'response.completed',
+          'response': {
+            'output': [message('Hi')],
+          },
+        },
+      ]),
+    );
+    final lines = (await rawCall(
+      socket,
+      '{"signIn":"cam-chatgpt","model":"gpt-6.1-sol","systemPrompt":"",'
+      '"request":"[{\\"role\\":\\"user\\",\\"content\\":\\"Hi\\"}]"}',
+    )).split('\n');
+    expect(
+      lines.first,
+      '{"kind":"reported","progress":{"kind":"replyArriving","text":"Hi"}}',
+    );
+    expect(
+      lines.last,
+      startsWith('{"kind":"finished","outcome":{"kind":"ran"'),
+    );
   });
 
   test(
@@ -484,6 +509,23 @@ void main() {
       },
     );
 
+    test('refuses named tools before anything is sent', () async {
+      final request = ModelRequest(
+        tools: const [],
+        namedTools: [fetchPage],
+        turns: [
+          const UserSaid('Hi'),
+          NamedToolsDefined([fetchPage.name]),
+        ],
+      ).encode();
+      final (out, _) = await ask(request);
+      expect(
+        (out as NothingRan).why,
+        contains('this driver does not send named tools yet'),
+      );
+      expect(seen, isEmpty);
+    });
+
     test('proposes the calls, and sends them back as they came', () async {
       // The arguments' spacing and 1e3 would change if anything re-encoded
       // them.
@@ -707,7 +749,19 @@ void main() {
       expect(
         await rawCall(socket, '{}'),
         '{"kind":"finished","outcome":{"kind":"nothingRan",'
-        '"why":"not a call: modelCall.signIn: not a string"}}',
+        '"why":"not a call: `signIn` is not a string"}}',
+      );
+      expect(seen, isEmpty);
+    });
+
+    test('refuses a call with a key it does not expect', () async {
+      expect(
+        await rawCall(
+          socket,
+          '{"signIn":"cam","model":"m","systemPrompt":"","request":"x",'
+          '"extra":1}',
+        ),
+        contains('not a call: '),
       );
       expect(seen, isEmpty);
     });
@@ -718,7 +772,7 @@ void main() {
           socket,
           '{"signIn":"Nick!","model":"m","systemPrompt":"","request":"x"}',
         ),
-        contains('not a call: modelCall.signIn: not a model sign-in'),
+        contains('not a call: `signIn` is not a model sign-in'),
       );
       expect(seen, isEmpty);
     });

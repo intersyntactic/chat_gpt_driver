@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:is_chat_gpt_driver/is_chat_gpt_driver.dart';
-import 'package:is_effects/is_effects.dart';
+import 'package:is_outcome_vocabulary/is_outcome_vocabulary.dart';
 import 'package:test/test.dart';
 
 final t0 = DateTime.utc(2026, 11, 19, 12);

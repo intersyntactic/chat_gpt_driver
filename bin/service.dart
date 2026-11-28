@@ -27,7 +27,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:is_chat_gpt_driver/is_chat_gpt_driver.dart';
-import 'package:is_effects/is_effects.dart';
+import 'package:is_model_vocabulary/is_model_vocabulary.dart';
 import 'package:is_unix_socket_user_check/is_unix_socket_user_check.dart';
 
 Future<void> main() async {
