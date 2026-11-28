@@ -1,7 +1,6 @@
 import 'dart:convert';
 
 import 'package:checked_json/checked_json.dart';
-import 'package:is_effects/is_effects.dart';
 import 'package:is_model_vocabulary/is_model_vocabulary.dart';
 
 /// The whole Responses API body for one call. The driver writes everything
@@ -73,6 +72,11 @@ String _fromTurns(
   if (request.turns.isEmpty) {
     throw const FormatException('request has no turns');
   }
+  // Dropping a named tool would hide it from the model without a word, so
+  // a request carrying one is refused until the driver can send them.
+  if (request.namedTools.isNotEmpty) {
+    throw const FormatException('this driver does not send named tools yet');
+  }
   return jsonEncode({
     'model': model.value,
     'instructions': systemPrompt,
@@ -116,6 +120,11 @@ String _fromTurns(
               'output': toolOutput(result),
             },
           ],
+          // Unreachable: a request defining named tools has some, and those
+          // are refused above.
+          NamedToolsDefined() => throw const FormatException(
+            'this driver does not send named tools yet',
+          ),
         },
     ],
   });
